@@ -140,22 +140,36 @@ export async function draftWithFile(
 	if (refusal !== undefined) {
 		throw new ErrorEditRefused(path, refusal);
 	}
-	const parts = path.split("/");
-	for (let i = 1; i < parts.length; i++) {
-		const [entry] = await treeList(repo, current, { recursive: false, paths: [`:(literal)${parts.slice(0, i).join("/")}`] });
-		if (entry !== undefined && entry.type !== "tree") {
-			throw new ErrorEditRefused(path, `${entry.path} is a file, not a directory`);
-		}
-	}
+	await pathCheck(repo, current, path);
 	let tree: Oid;
 	if (content === null) {
 		tree = await treeWithChanges(repo, current, [{ path, delete: "file" }]);
 	} else {
-		const [entry] = await treeList(repo, current, { recursive: false, paths: [`:(literal)${path}`] });
-		const mode = entry !== undefined && entry.path === path && entry.type === "blob" ? entry.mode : "100644";
+		// A file the draft had removed comes back with the mode it has in the commit.
+		const entry = (await entryAt(repo, current, path)) ?? (await entryAt(repo, commit.tree, path));
+		const mode = entry?.type === "blob" ? entry.mode : "100644";
 		tree = await treeWithChanges(repo, current, [{ path, mode, oid: await blobWrite(repo, content) }]);
 	}
 	return draftFor(commit, branch, tree, existing ? draftMessage(existing) : undefined);
+}
+
+async function entryAt(repo: Repo, tree: Oid, path: string) {
+	const [entry] = await treeList(repo, tree, { recursive: false, paths: [`:(literal)${path}`] });
+	return entry !== undefined && entry.path === path ? entry : undefined;
+}
+
+// Refuses a file write that git's index would carry out by silently deleting other entries: a file where the tree has a directory, or under a path the tree has as a file.
+async function pathCheck(repo: Repo, tree: Oid, path: string): Promise<void> {
+	const parts = path.split("/");
+	for (let i = 1; i < parts.length; i++) {
+		const entry = await entryAt(repo, tree, parts.slice(0, i).join("/"));
+		if (entry !== undefined && entry.type !== "tree") {
+			throw new ErrorEditRefused(path, `${entry.path} is a file, not a directory`);
+		}
+	}
+	if ((await entryAt(repo, tree, path))?.type === "tree") {
+		throw new ErrorEditRefused(path, "it is a directory here");
+	}
 }
 
 export function draftWithMessage(branch: string, commit: CommitBasics, existing: DraftEntry | undefined, message: Buffer | undefined): DraftEntry | undefined {

@@ -68,6 +68,28 @@ describe("session drafts", () => {
 		expect(readFileSync(join(fx.dir, "new/file.txt"), "utf8")).toBe("new\n");
 	});
 
+	test("a draft write that would drop other entries is refused", async () => {
+		fx.git("rm", "-q", "a.txt");
+		const c3 = fx.commit("a.txt becomes a directory", { "a.txt/inner.txt": "inner\n" });
+		await session.draftSetFile(c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
+		await expect(session.draftSetFile(c3, "a.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		expect((await file(c3, "a.txt/inner.txt")).draft?.toString()).toBe("edited inner\n");
+		const c4 = fx.commit("b.txt goes away", { "b.txt": null });
+		await session.draftSetFile(c4, "b.txt", Buffer.from("back as a file\n"));
+		await expect(session.draftSetFile(c4, "b.txt/under.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+	});
+
+	test("a file the draft emptied out of the commit comes back with its mode", async () => {
+		fx.write("run.sh", "#!/bin/sh\n");
+		chmodSync(join(fx.dir, "run.sh"), 0o755);
+		fx.git("add", "run.sh");
+		const c3 = fx.commit("c3", {});
+		await session.draftSetFile(c3, "run.sh", null);
+		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
+		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
+	});
+
 	test("drafts persist across sessions and survive gc --prune=now", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from("precious draft\n"));
 		session.close();
