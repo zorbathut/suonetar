@@ -13,5 +13,22 @@
 	},
 	"javascript": { "formatter": { "quoteStyle": "double" } },
 	"assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
-	"overrides": [{ "includes": ["*.config.ts"], "linter": { "rules": { "style": { "noDefaultExport": "off" } } } }]
+	"overrides": [
+		{ "includes": ["*.config.ts"], "linter": { "rules": { "style": { "noDefaultExport": "off" } } } },
+		{
+			"includes": ["src/renderer/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedGlobals": {
+							"level": "error",
+							"options": {
+								"deniedGlobals": { "Buffer": "The renderer has no Node; use Uint8Array.", "process": "The renderer has no Node.", "require": "The renderer has no Node." }
+							}
+						}
+					}
+				}
+			}
+		}
+	]
 }

@@ -1,0 +1,38 @@
+import { contextBridge, ipcRenderer } from "electron";
+import { apiChannel, type SuonetarApi, type SuonetarShell } from "../shared/api.ts";
+
+const api: SuonetarApi = {
+	state: () => ipcRenderer.invoke(apiChannel("state")),
+	generation: () => ipcRenderer.invoke(apiChannel("generation")),
+	commitDocument: (oid) => ipcRenderer.invoke(apiChannel("commitDocument"), oid),
+	draftDocument: (against) => ipcRenderer.invoke(apiChannel("draftDocument"), against),
+	blob: (oid) => ipcRenderer.invoke(apiChannel("blob"), oid),
+	blobAt: (tree, path) => ipcRenderer.invoke(apiChannel("blobAt"), tree, path),
+	draftSetFile: (oid, path, content) => ipcRenderer.invoke(apiChannel("draftSetFile"), oid, path, content),
+	draftRestore: (oid, path, from) => ipcRenderer.invoke(apiChannel("draftRestore"), oid, path, from),
+	draftSetMessage: (oid, message) => ipcRenderer.invoke(apiChannel("draftSetMessage"), oid, message),
+	draftDiscard: (against) => ipcRenderer.invoke(apiChannel("draftDiscard"), against),
+	draftConfirm: (against) => ipcRenderer.invoke(apiChannel("draftConfirm"), against),
+	draftAdopt: (against) => ipcRenderer.invoke(apiChannel("draftAdopt"), against),
+	resolve: (inputs, key, choices) => ipcRenderer.invoke(apiChannel("resolve"), inputs, key, choices),
+	preview: () => ipcRenderer.invoke(apiChannel("preview")),
+	apply: () => ipcRenderer.invoke(apiChannel("apply")),
+};
+
+const shell: SuonetarShell = {
+	onCloseRequest(handler) {
+		ipcRenderer.on("suonetar:close-request", () => {
+			handler().then(
+				(ok) => ipcRenderer.send("suonetar:close-reply", ok),
+				(err: unknown) => {
+					console.error("suonetar: close handler failed:", err);
+					ipcRenderer.send("suonetar:close-reply", false);
+				},
+			);
+		});
+		ipcRenderer.send("suonetar:close-ready");
+	},
+};
+
+contextBridge.exposeInMainWorld("suonetar", api);
+contextBridge.exposeInMainWorld("suonetarShell", shell);

@@ -1,0 +1,41 @@
+import type { MergeInputs } from "../engine/replay.ts";
+import type { ApplyResult, CommitDocument, PreviewResult, ResolutionChoice, ResolveResult, SessionState } from "../engine/session.ts";
+
+// An engine type as it arrives on the other side of IPC: structured clone turns every Buffer into a plain Uint8Array.
+export type Wire<T> = T extends Uint8Array ? Uint8Array : T extends readonly (infer U)[] ? readonly Wire<U>[] : T extends object ? { readonly [K in keyof T]: Wire<T[K]> } : T;
+
+// Errors cross IPC as data, since Electron reduces a thrown error to its message; the name keeps engine error classes (`ErrorStale`, `ErrorEditRefused`) distinguishable.
+export type WireError = { readonly name: string; readonly message: string };
+
+export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: WireError };
+
+// The session as the renderer sees it; every method is one IPC round trip into `Session`.
+export type SuonetarApi = {
+	readonly state: () => Promise<Result<Wire<SessionState>>>;
+	readonly generation: () => Promise<Result<string>>;
+	readonly commitDocument: (oid: string) => Promise<Result<Wire<CommitDocument>>>;
+	readonly draftDocument: (against: string) => Promise<Result<Wire<CommitDocument>>>;
+	readonly blob: (oid: string) => Promise<Result<Uint8Array | undefined>>;
+	readonly blobAt: (tree: string, path: string) => Promise<Result<Uint8Array | undefined>>;
+	readonly draftSetFile: (oid: string, path: string, content: Uint8Array | null) => Promise<Result<undefined>>;
+	readonly draftRestore: (oid: string, path: string, from: "commit" | "parent") => Promise<Result<undefined>>;
+	readonly draftSetMessage: (oid: string, message: Uint8Array | null) => Promise<Result<undefined>>;
+	readonly draftDiscard: (against: string) => Promise<Result<undefined>>;
+	readonly draftConfirm: (against: string) => Promise<Result<undefined>>;
+	readonly draftAdopt: (against: string) => Promise<Result<undefined>>;
+	readonly resolve: (inputs: MergeInputs, key: string, choices: readonly Wire<ResolutionChoice>[]) => Promise<Result<ResolveResult>>;
+	readonly preview: () => Promise<Result<Wire<PreviewResult>>>;
+	readonly apply: () => Promise<Result<Wire<ApplyResult>>>;
+};
+
+// Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.
+export type SuonetarShell = {
+	// The handler resolves to true when the window may close.
+	readonly onCloseRequest: (handler: () => Promise<boolean>) => void;
+};
+
+export function apiChannel(name: keyof SuonetarApi): string {
+	return `suonetar:${name}`;
+}
+
+export type ApiValue<K extends keyof SuonetarApi> = Awaited<ReturnType<SuonetarApi[K]>> extends Result<infer T> ? T : never;

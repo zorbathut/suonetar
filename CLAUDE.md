@@ -4,6 +4,12 @@ A commit-stack editor for plain git: scrub through a series of commits, open any
 
 The founding design brief is `docs/design-brief.md`; research notes and decisions live alongside it in `docs/`.
 
+## Build and run
+
+- `npm run app -- <repo>` builds and opens the editor on a repository (relative paths resolve against where npm was run); `npm run dev -- <repo>` runs it with renderer hot reload.
+- `npm run check` type-checks (two programs: `tsconfig.json` for engine, main, and preload; `tsconfig.renderer.json` for the DOM side) and lints; `npm test` runs the Vitest suite, which drives real git.
+- Layout: `src/engine` (git operations, Node only), `src/main` (Electron main process, hosts the engine), `src/preload` (the IPC bridge), `src/shared` (types both sides of IPC use), `src/renderer` (the UI; no Node access).
+
 ## Standards
 
 Language-agnostic standards, always in force:
