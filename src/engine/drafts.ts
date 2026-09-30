@@ -5,7 +5,7 @@ import { treeList } from "./objects.ts";
 import type { Edit } from "./replay.ts";
 import type { Stack, StackCommit } from "./stack.ts";
 import type { DraftEntry, DraftMeta } from "./store.ts";
-import { blobWrite, treeWithChanges } from "./write.ts";
+import { blobWrite, type TreeChange, treeWithChanges } from "./write.ts";
 
 // What a draft needs to know about the commit it edits; any commit object will do, in the stack or not.
 export type CommitBasics = Pick<StackCommit, "oid" | "tree" | "authorLine" | "subject" | "message">;
@@ -170,6 +170,26 @@ async function pathCheck(repo: Repo, tree: Oid, path: string): Promise<void> {
 	if ((await entryAt(repo, tree, path))?.type === "tree") {
 		throw new ErrorEditRefused(path, "it is a directory here");
 	}
+}
+
+// Sets one path of a draft to exactly the entry it has in `source` (mode included), or deletes it when `source` lacks it, so a symlink or an executable keeps its mode.
+export async function draftWithEntry(
+	repo: Repo,
+	branch: string,
+	commit: CommitBasics,
+	existing: DraftEntry | undefined,
+	path: string,
+	source: Oid,
+): Promise<DraftEntry | undefined> {
+	const current = existing?.tree ?? commit.tree;
+	const entry = await entryAt(repo, source, path);
+	if (entry?.type === "tree") {
+		throw new ErrorEditRefused(path, "it is a directory");
+	}
+	await pathCheck(repo, current, path);
+	const change: TreeChange = entry !== undefined ? { path, mode: entry.mode, oid: entry.oid } : { path, delete: "file" };
+	const tree = await treeWithChanges(repo, current, [change]);
+	return draftFor(commit, branch, tree, existing ? draftMessage(existing) : undefined);
 }
 
 export function draftWithMessage(branch: string, commit: CommitBasics, existing: DraftEntry | undefined, message: Buffer | undefined): DraftEntry | undefined {

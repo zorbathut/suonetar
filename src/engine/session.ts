@@ -1,5 +1,5 @@
 import { intentCheck, type PublishResult, publish } from "./apply.ts";
-import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
+import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
 import { gitOk, gitRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
 import { type Conflict, mergeTrees } from "./merge.ts";
@@ -119,6 +119,11 @@ export class Session {
 		this.#cat.close();
 	}
 
+	// Closes once the operation in progress (and any queued behind it) has finished.
+	closeWhenIdle(): Promise<void> {
+		return this.#mutex.run(async () => this.close());
+	}
+
 	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, or the configured base changes.
 	generation(): Promise<string> {
 		return this.#mutex.run(async () => {
@@ -188,6 +193,10 @@ export class Session {
 		});
 	}
 
+	blobAt(tree: Oid, path: string): Promise<Buffer | undefined> {
+		return this.#mutex.run(() => this.#blobAt(tree, path));
+	}
+
 	blob(oid: Oid): Promise<Buffer | undefined> {
 		return this.#mutex.run(async () => {
 			const obj = await this.#cat.read(oid);
@@ -203,6 +212,25 @@ export class Session {
 			const existing = store.drafts.get(oid);
 			const branch = await this.#draftBranch(existing, path);
 			const next = await draftWithFile(this.repo, branch, commit, existing, path, content);
+			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
+		});
+	}
+
+	// Sets one file of a commit's draft back to its version in the commit or in the commit's parent, mode and all; absent there means deleted.
+	draftRestore(oid: Oid, path: string, from: "commit" | "parent"): Promise<void> {
+		return this.#mutex.run(async () => {
+			const commit = await this.#basics(oid);
+			let source = commit.tree;
+			if (from === "parent") {
+				const parent = (await this.#commit(oid)).parents[0];
+				if (parent === undefined) {
+					throw new ErrorStale(`the parent of ${oid.slice(0, 12)}`);
+				}
+				source = (await commitRead(this.#cat, parent)).tree;
+			}
+			const store = await storeRead(this.repo, this.#cat);
+			const existing = store.drafts.get(oid);
+			const next = await draftWithEntry(this.repo, await this.#draftBranch(existing, path), commit, existing, path, source);
 			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
 		});
 	}

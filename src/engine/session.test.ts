@@ -68,6 +68,33 @@ describe("session drafts", () => {
 		expect(readFileSync(join(fx.dir, "new/file.txt"), "utf8")).toBe("new\n");
 	});
 
+	test("restoring a file takes the whole tree entry, so a deleted symlink comes back as a symlink", async () => {
+		symlinkSync("a.txt", join(fx.dir, "link"));
+		fx.git("add", "link");
+		const c3 = fx.commit("add link", {});
+		fx.git("rm", "-q", "link");
+		const c4 = fx.commit("delete link", {});
+		session.close();
+		session = await Session.openRepo(fx.repo);
+		await session.draftRestore(c4, "link", "parent");
+		expect((await file(c4, "link")).status).toBe("=");
+		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(fx.git("ls-tree", "HEAD", "link").split(" ")[0]).toBe("120000");
+		expect(fx.git("rev-parse", "HEAD:link")).toBe(fx.git("rev-parse", `${c3}:link`));
+	});
+
+	test("reverting a file to the commit keeps its mode and drops the draft", async () => {
+		fx.write("run.sh", "#!/bin/sh\n");
+		chmodSync(join(fx.dir, "run.sh"), 0o755);
+		fx.git("add", "run.sh");
+		const c3 = fx.commit("c3", {});
+		await session.draftSetFile(c3, "run.sh", null);
+		await session.draftSetFile(c3, "extra.txt", Buffer.from("extra\n"));
+		await session.draftRestore(c3, "run.sh", "commit");
+		await session.draftRestore(c3, "extra.txt", "commit");
+		expect(await drafts()).toEqual([]);
+	});
+
 	test("a draft write that would drop other entries is refused", async () => {
 		fx.git("rm", "-q", "a.txt");
 		const c3 = fx.commit("a.txt becomes a directory", { "a.txt/inner.txt": "inner\n" });
@@ -77,6 +104,14 @@ describe("session drafts", () => {
 		const c4 = fx.commit("b.txt goes away", { "b.txt": null });
 		await session.draftSetFile(c4, "b.txt", Buffer.from("back as a file\n"));
 		await expect(session.draftSetFile(c4, "b.txt/under.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+	});
+
+	test("restoring across a file/directory change is refused rather than dropping drafted files", async () => {
+		fx.git("rm", "-q", "a.txt");
+		const c3 = fx.commit("a.txt becomes a directory", { "a.txt/inner.txt": "inner\n" });
+		await session.draftSetFile(c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
+		await expect(session.draftRestore(c3, "a.txt", "parent")).rejects.toBeInstanceOf(ErrorEditRefused);
+		expect((await file(c3, "a.txt/inner.txt")).draft?.toString()).toBe("edited inner\n");
 	});
 
 	test("a file the draft emptied out of the commit comes back with its mode", async () => {
