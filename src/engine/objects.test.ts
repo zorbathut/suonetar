@@ -26,6 +26,14 @@ describe("objects", () => {
 		expect(b?.data.equals(binary)).toBe(true);
 	});
 
+	test("closing rejects reads still waiting for an answer", async () => {
+		fx.commit("base", { "a.txt": "a\n" });
+		const pending = cat.read("HEAD:a.txt");
+		cat.close();
+		await expect(pending).rejects.toThrow("closed");
+		await expect(cat.read("HEAD:a.txt")).rejects.toThrow("closed");
+	});
+
 	test("parses commits, keeping the author line and message bytes verbatim", async () => {
 		fx.commit("base", { "a.txt": "a\n" });
 		const oid = fx.commit("subject line\n\nbody  \n# kept\n", { "a.txt": "b\n" });

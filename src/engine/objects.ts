@@ -55,8 +55,10 @@ export class CatFile {
 	}
 
 	close(): void {
-		this.#queue.length = 0;
 		this.#failure = new Error("CatFile closed");
+		for (const pending of this.#queue.splice(0)) {
+			pending.reject(this.#failure);
+		}
 		this.#child.stdin.end();
 	}
 
