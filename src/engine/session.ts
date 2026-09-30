@@ -167,7 +167,7 @@ export class Session {
 			if (parent === undefined) {
 				throw new ErrorStale(`the parent of ${oid.slice(0, 12)}`);
 			}
-			const draft = (await storeRead(this.repo, this.#cat)).drafts.get(oid);
+			const draft = await this.#draftHere((await storeRead(this.repo, this.#cat)).drafts.get(oid));
 			const parentTree = (await commitRead(this.#cat, parent)).tree;
 			const files = await this.#documentFiles(parentTree, commit.tree, draft?.tree ?? commit.tree);
 			const draftMsg = draft ? draftMessage(draft) : undefined;
@@ -423,10 +423,26 @@ export class Session {
 		return { oid, tree: info.tree, authorLine: info.authorLine, subject: commitSubject(info), message: info.message };
 	}
 
-	// The branch a draft belongs to: the checked-out branch, or while HEAD is detached (mid-rebase, say) the branch the draft already has.
-	async #draftBranch(existing: DraftEntry | undefined, path: string): Promise<string> {
+	// A commit's stored draft, unless it belongs to another branch: that one is shown and adopted separately, never blended into this branch's view.
+	async #draftHere(draft: DraftEntry | undefined): Promise<DraftEntry | undefined> {
+		if (draft === undefined) {
+			return undefined;
+		}
 		try {
-			return await branchCurrent(this.repo);
+			return draft.meta.branch === (await branchCurrent(this.repo)) ? draft : undefined;
+		} catch (err) {
+			if (err instanceof ErrorNotOnBranch) {
+				return draft;
+			}
+			throw err;
+		}
+	}
+
+	// The branch a draft belongs to: the checked-out branch, or while HEAD is detached (mid-rebase, say) the branch the draft already has. A draft from another branch is never extended; it has to be adopted first.
+	async #draftBranch(existing: DraftEntry | undefined, path: string): Promise<string> {
+		let branch: string;
+		try {
+			branch = await branchCurrent(this.repo);
 		} catch (err) {
 			if (err instanceof ErrorNotOnBranch && existing !== undefined) {
 				return existing.meta.branch;
@@ -436,5 +452,9 @@ export class Session {
 			}
 			throw err;
 		}
+		if (existing !== undefined && existing.meta.branch !== branch) {
+			throw new ErrorEditRefused(path, `an edit made on ${existing.meta.branch} is stored for this commit; adopt or discard it first`);
+		}
+		return branch;
 	}
 }

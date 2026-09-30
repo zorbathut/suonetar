@@ -90,6 +90,16 @@ describe("session drafts", () => {
 		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
 	});
 
+	test("a draft from another branch is not blended into this branch's view and cannot be extended here", async () => {
+		await session.draftSetFile(c1, "a.txt", Buffer.from("feature edit\n"));
+		fx.git("switch", "-q", "-c", "feature-2");
+		expect((await drafts()).map((d) => d.kind)).toEqual(["elsewhere"]);
+		expect((await file(c1, "a.txt")).draft?.toString()).toBe(lineSet(lines("a"), 2, "c1"));
+		await expect(session.draftSetFile(c1, "a.txt", Buffer.from("other\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await session.draftAdopt(c1);
+		expect((await file(c1, "a.txt")).draft?.toString()).toBe("feature edit\n");
+	});
+
 	test("drafts persist across sessions and survive gc --prune=now", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from("precious draft\n"));
 		session.close();
