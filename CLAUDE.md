@@ -10,7 +10,6 @@ Language-agnostic standards, always in force:
 
 @CLAUDE-general.md
 
-Language-specific standards. Both are imported until the implementation stack is settled; delete the one that doesn't apply once it is.
+The implementation stack is TypeScript end to end (Electron, CodeMirror 6); see `docs/research-2026-09-30.md` section 3.8.
 
-@CLAUDE-rust.md
-@CLAUDE-python.md
+@CLAUDE-typescript.md
