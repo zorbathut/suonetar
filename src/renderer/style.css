@@ -139,12 +139,19 @@ body.busy #body {
 	opacity: 0.6;
 }
 
-#stack {
+#side {
 	width: 340px;
 	flex: none;
-	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 	border-right: 1px solid var(--border);
 	background: var(--bg-alt);
+}
+
+#stack {
+	flex: 0 1 auto;
+	overflow-y: auto;
 }
 
 #doc {

@@ -26,6 +26,7 @@ const undoEl = byId("undo");
 const applyEl = byId("apply");
 const cancelEl = byId("cancel");
 const statusEl = byId("status");
+const sideEl = byId("side");
 const stackEl = byId("stack");
 const docEl = byId("doc");
 
@@ -224,7 +225,7 @@ function undoButtonUpdate(): void {
 function busySet(value: boolean): void {
 	busy = value;
 	document.body.classList.toggle("busy", value);
-	stackEl.inert = value;
+	sideEl.inert = value;
 	docEl.inert = value;
 	if (applyEl instanceof HTMLButtonElement) {
 		applyEl.disabled = value;
