@@ -12,9 +12,9 @@ describe("commitWrite", () => {
 		cat = new CatFile(fx.repo);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	test("keeps a Latin-1 author line, the encoding header, and the message bytes exactly", async () => {

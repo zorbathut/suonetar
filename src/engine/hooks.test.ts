@@ -1,10 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Oid } from "./git.ts";
 import { type HookChoice, Session } from "./session.ts";
-import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
+import { type Fixture, lineSet, lines, repoFixture, shPath } from "./test-support/repo.ts";
 
 const RUN: HookChoice = { kind: "run", skip: [] };
 
@@ -18,7 +18,7 @@ describe("pre-commit hooks at apply", () => {
 
 	beforeEach(async () => {
 		fx = await repoFixture();
-		log = join(fx.dir, ".git", "hook.log");
+		log = shPath(join(fx.dir, ".git", "hook.log"));
 		fx.commit("base", { "a.txt": lines("a"), "b.txt": lines("b"), "c.txt": lines("c") });
 		fx.git("switch", "-q", "-c", "feature");
 		c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
@@ -27,9 +27,9 @@ describe("pre-commit hooks at apply", () => {
 		session = await Session.openRepo(fx.repo, undefined);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		session.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	function hookInstall(body: string, path = join(fx.dir, ".git", "hooks", "pre-commit")): void {
@@ -65,7 +65,7 @@ describe("pre-commit hooks at apply", () => {
 		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
 		const result = await apply();
 		expect(result.kind).toBe("published");
-		const wt = realpathSync(join(fx.dir, ".git", "suonetar", "wt"));
+		const wt = shPath(realpathSync.native(join(fx.dir, ".git", "suonetar", "wt")));
 		expect(logLines()).toEqual([`${wt}|b.txt,`, `${wt}|c.txt,`]);
 		expect(fx.git("status", "--porcelain")).toBe(statusBefore);
 		expect(fx.git("log", "--all", "--format=%s")).not.toContain("suonetar: hook parent");
@@ -95,6 +95,16 @@ exit $changed`);
 			["c1", ["f.txt"]],
 			["c2", ["f.txt"]],
 		]);
+	});
+
+	test("with core.autocrlf on, as Git for Windows sets it, hook changes land in repository form and files in checkout form", async () => {
+		fx.git("config", "core.autocrlf", "true");
+		hookInstall(`for f in $(git diff --cached --name-only); do echo fixed >> "$f"; done; exit 0`);
+		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		expect((await apply()).kind).toBe("published");
+		expect(show("HEAD~1", "b.txt")).toBe("edited\nfixed");
+		expect(readFileSync(join(fx.dir, "b.txt"), "utf8")).toBe("edited\r\nfixed\r\n");
+		expect(fx.git("status", "--porcelain")).toBe("");
 	});
 
 	test("a later commit that deletes a reformatted file deletes it", async () => {
@@ -141,7 +151,7 @@ exit $changed`);
 	});
 
 	test("skipping hooks, for the apply or for one commit", async () => {
-		const flag = join(fx.dir, ".git", "fail-on");
+		const flag = shPath(join(fx.dir, ".git", "fail-on"));
 		hookInstall(`if git diff --cached --name-only | grep -qx "$(cat ${flag})"; then exit 1; fi; ${LOGGING.replace("$LOG", log)}`);
 		writeFileSync(flag, "b.txt");
 		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
@@ -157,7 +167,7 @@ exit $changed`);
 	});
 
 	test("commits that already passed are not re-run after a later failure is fixed", async () => {
-		const flag = join(fx.dir, ".git", "fail-on");
+		const flag = shPath(join(fx.dir, ".git", "fail-on"));
 		hookInstall(`${LOGGING.replace("$LOG", log)}; if git diff --cached --name-only | grep -qx "$(cat ${flag})"; then exit 1; fi`);
 		writeFileSync(flag, "c.txt");
 		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
@@ -176,7 +186,7 @@ exit $changed`);
 	});
 
 	test("cancelling stops a hanging hook, and the next apply works", async () => {
-		const started = join(fx.dir, ".git", "started");
+		const started = shPath(join(fx.dir, ".git", "started"));
 		hookInstall(`touch ${started}; sleep 30`);
 		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
 		const running = apply();
@@ -236,7 +246,7 @@ exit $changed`);
 
 	test("another live process holding the worktree makes the apply busy", async () => {
 		hookInstall("exit 0");
-		const other = spawn("sleep", ["30"]);
+		const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"]);
 		try {
 			mkdirSync(join(fx.dir, ".git", "suonetar"), { recursive: true });
 			writeFileSync(join(fx.dir, ".git", "suonetar", "wt.lock"), String(other.pid));
@@ -263,7 +273,7 @@ exit $changed`);
 		const shared = join(fx.dir, "..", `shared-hooks-${Date.now()}`);
 		try {
 			hookInstall(LOGGING.replace("$LOG", log), join(shared, "pre-commit"));
-			fx.git("config", "core.hooksPath", `../${shared.split("/").at(-1)}`);
+			fx.git("config", "core.hooksPath", `../${basename(shared)}`);
 			await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
 			expect((await apply()).kind).toBe("published");
 			expect(logLines().length).toBe(1);
@@ -279,7 +289,7 @@ exit $changed`);
 		rmSync(other, { recursive: true, force: true });
 		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
-		expect(fx.git("worktree", "list", "--porcelain")).toContain(other.split("/").at(-1));
+		expect(fx.git("worktree", "list", "--porcelain")).toContain(basename(other));
 	});
 
 	test("a commit whose hook is skipped keeps the formatting earlier commits received", async () => {
@@ -362,9 +372,9 @@ exit $changed`);
 	});
 
 	test("when the branch moves during the pass, applying again reuses the passed commits", async () => {
-		const once = join(fx.dir, ".git", "moved-once");
+		const once = shPath(join(fx.dir, ".git", "moved-once"));
 		hookInstall(`${LOGGING.replace("$LOG", log)}
-if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touch ${once}; env -u GIT_DIR -u GIT_INDEX_FILE git -C ${fx.dir} commit -q --no-verify --allow-empty -m claude; fi`);
+if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touch ${once}; env -u GIT_DIR -u GIT_INDEX_FILE git -C ${shPath(fx.dir)} commit -q --no-verify --allow-empty -m claude; fi`);
 		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("moved");
 		expect(logLines().length).toBe(2);
@@ -382,6 +392,8 @@ if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touc
 		writeFileSync(join(admin, "index.lock"), "");
 		await session.draftSetFile(fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited twice\n"));
 		expect((await apply()).kind).toBe("published");
+		// Removed first: Git for Windows marks it hidden, and Windows will not overwrite a hidden file.
+		rmSync(join(wt, ".git"));
 		writeFileSync(join(wt, ".git"), "gitdir: /nowhere\n");
 		await session.draftSetFile(fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited thrice\n"));
 		expect((await apply()).kind).toBe("published");
@@ -389,15 +401,10 @@ if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touc
 
 	test("when the hook machinery itself fails, the apply says so instead of throwing", async () => {
 		hookInstall("exit 0");
-		const dir = join(fx.dir, ".git", "suonetar");
 		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
-		mkdirSync(dir, { recursive: true });
-		chmodSync(dir, 0o555);
-		try {
-			const result = await apply();
-			expect(result.kind).toBe("hook-error");
-		} finally {
-			chmodSync(dir, 0o755);
-		}
+		// A directory where the worktree's lock file goes cannot be read as one.
+		mkdirSync(join(fx.dir, ".git", "suonetar", "wt.lock"), { recursive: true });
+		const result = await apply();
+		expect(result.kind).toBe("hook-error");
 	});
 });

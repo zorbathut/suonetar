@@ -14,9 +14,9 @@ describe("stackRead", () => {
 		fx.commit("base", { "a.txt": "a\n" });
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	test("lists the commits between main and the branch, oldest first", async () => {

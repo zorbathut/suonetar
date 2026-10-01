@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CatFile } from "./objects.ts";
 import { Session } from "./session.ts";
 import { repoInterleaved } from "./test-support/interleave.ts";
-import { type Fixture, repoFixture } from "./test-support/repo.ts";
+import { type Fixture, repoFixture, symlinksWork } from "./test-support/repo.ts";
 import { worktreeFiles, worktreeStatus } from "./worktree-changes.ts";
 
 describe("worktree changes", () => {
@@ -19,9 +19,9 @@ describe("worktree changes", () => {
 		cat = new CatFile(fx.repo);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	const text = (b: Buffer | undefined) => b?.toString();
@@ -76,13 +76,23 @@ describe("worktree changes", () => {
 		expect((await worktreeStatus(fx.repo, MAX)).unstaged).toBe(2);
 	});
 
-	test("reads symlinks as their target, skips large files' contents, and caps the list", async () => {
-		symlinkSync("a.txt", join(fx.dir, "link"));
+	test.skipIf(!symlinksWork)("reads symlinks as their target, with git's slashes, and shows a file turned into one as a type change", async () => {
+		symlinkSync("dir/a.txt", join(fx.dir, "link"));
+		fx.git("rm", "-q", "--cached", "c.txt");
+		unlinkSync(join(fx.dir, "c.txt"));
+		symlinkSync("a.txt", join(fx.dir, "c.txt"));
+		fx.git("add", "c.txt");
+		const docs = await documents();
+		expect(docs.unstaged.link?.[2]).toBe("dir/a.txt");
+		expect(docs.staged["c.txt"]).toEqual(["T", "c\n", "a.txt"]);
+	});
+
+	test("skips large files' contents, and caps the list", async () => {
 		fx.write("big.bin", "x".repeat(LIMIT + 1));
 		fx.write("small.txt", "s\n");
+		fx.write("other.txt", "o\n");
 		const doc = await worktreeFiles(fx.repo, cat, "unstaged", MAX, LIMIT);
 		const byPath = Object.fromEntries(doc.files.map((f) => [f.path, f]));
-		expect(text(byPath.link?.commit)).toBe("a.txt");
 		expect(byPath["big.bin"]?.tooLarge).toBe(true);
 		expect(byPath["big.bin"]?.commit).toBeUndefined();
 		const capped = await worktreeFiles(fx.repo, cat, "unstaged", 2, LIMIT);
@@ -134,23 +144,23 @@ describe("worktree changes", () => {
 		}
 	});
 
-	test("handles odd paths, type changes, intent-to-add, and attributes marking files binary", async () => {
+	test("handles odd paths, intent-to-add, and attributes marking files binary", async () => {
 		fx.commit("attributes", { ".gitattributes": "*.dat binary\n" });
 		fx.write("sp ace.txt", "s\n");
-		fx.write("we\nird.txt", "w\n");
+		// Windows allows no line break in a file name.
+		const weird = process.platform === "win32" ? undefined : "we\nird.txt";
+		if (weird !== undefined) {
+			fx.write(weird, "w\n");
+		}
 		fx.write("data.dat", "looks like text\n");
-		fx.git("rm", "-q", "--cached", "c.txt");
-		symlinkSync("a.txt", join(fx.dir, "c-link"));
-		unlinkSync(join(fx.dir, "c.txt"));
-		symlinkSync("a.txt", join(fx.dir, "c.txt"));
-		fx.git("add", "c.txt");
 		fx.write("planned.txt", "planned\n");
 		fx.git("add", "-N", "planned.txt");
 		const status = await worktreeStatus(fx.repo, MAX);
 		const docs = await documents();
-		expect(docs.staged["c.txt"]).toEqual(["T", "c\n", "a.txt"]);
 		expect(docs.unstaged["sp ace.txt"]?.[2]).toBe("s\n");
-		expect(docs.unstaged["we\nird.txt"]?.[2]).toBe("w\n");
+		if (weird !== undefined) {
+			expect(docs.unstaged[weird]?.[2]).toBe("w\n");
+		}
 		expect(docs.unstaged["planned.txt"]).toEqual(["A", undefined, "planned\n"]);
 		expect(docs.raw.unstaged.files.find((f) => f.path === "data.dat")?.binary).toBe(true);
 		expect([status.staged, status.unstaged]).toEqual([docs.raw.staged.files.length, docs.raw.unstaged.files.length]);
@@ -184,7 +194,7 @@ describe("worktree changes", () => {
 			expect(unborn.git("count-objects")).toBe(objects);
 		} finally {
 			unbornCat.close();
-			unborn.cleanup();
+			await unborn.cleanup();
 		}
 	});
 

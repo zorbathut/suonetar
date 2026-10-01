@@ -11,9 +11,9 @@ describe("objects", () => {
 		cat = new CatFile(fx.repo);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	test("reads blobs, including binary content and missing objects", async () => {

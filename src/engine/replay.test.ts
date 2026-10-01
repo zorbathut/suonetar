@@ -19,9 +19,9 @@ describe("replay", () => {
 		fx.git("switch", "-q", "-c", "feature");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	async function fileEdit(commit: Oid, path: string, content: string | null): Promise<Oid> {

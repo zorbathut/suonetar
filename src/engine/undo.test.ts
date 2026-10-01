@@ -36,9 +36,9 @@ describe("undo", () => {
 		session = await Session.openRepo(fx.repo, undefined);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		session.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	async function ready() {

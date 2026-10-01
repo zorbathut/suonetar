@@ -1,8 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { envInherited, fileReaderDisk, hookRunnerSpawn } from "./git.ts";
+import { dirRemove, shPath, shSleeper } from "./test-support/repo.ts";
+
+const WINDOWS = process.platform === "win32";
 
 function alive(pid: number): boolean {
 	try {
@@ -26,6 +29,12 @@ async function eventually(check: () => boolean): Promise<boolean> {
 	return check();
 }
 
+// The pid a shSleeper wrote, once it has.
+async function pidRead(file: string): Promise<number> {
+	await eventually(() => existsSync(file) && readFileSync(file, "utf8").trim() !== "");
+	return Number(readFileSync(file, "utf8"));
+}
+
 describe("hook runner", () => {
 	let dir: string;
 	const env = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
@@ -34,8 +43,8 @@ describe("hook runner", () => {
 		dir = mkdtempSync(join(tmpdir(), "suonetar-hook-"));
 	});
 
-	afterEach(() => {
-		rmSync(dir, { recursive: true, force: true });
+	afterEach(async () => {
+		await dirRemove(dir);
 	});
 
 	// A shell alias stands in for `git hook run`: same process tree shape, no repository needed.
@@ -46,7 +55,7 @@ describe("hook runner", () => {
 	test("a background child holding the output pipe neither delays the result nor survives it", async () => {
 		const pidFile = join(dir, "pid");
 		const started = Date.now();
-		const result = await hookRunnerSpawn()(alias(`echo done; (sleep 30; echo late >&2) & echo $! > ${pidFile}; exit 3`), {
+		const result = await hookRunnerSpawn()(alias(`echo done; ${shSleeper(pidFile)} & exit 3`), {
 			cwd: dir,
 			env,
 			signal: new AbortController().signal,
@@ -55,16 +64,20 @@ describe("hook runner", () => {
 		expect(Date.now() - started).toBeLessThan(5000);
 		expect(result.code).toBe(3);
 		expect(result.output).toContain("done");
-		const pid = Number(readFileSync(pidFile, "utf8"));
-		expect(await eventually(() => !alive(pid))).toBe(true);
+		const pid = await pidRead(pidFile);
+		// Windows has no process group to find it by once the hook has exited.
+		if (WINDOWS) {
+			process.kill(pid);
+		} else {
+			expect(await eventually(() => !alive(pid))).toBe(true);
+		}
 	});
 
 	test("aborting kills the hook and its children", async () => {
 		const pidFile = join(dir, "pid");
 		const controller = new AbortController();
-		const running = hookRunnerSpawn()(alias(`sleep 30 & echo $! > ${pidFile}; wait`), { cwd: dir, env, signal: controller.signal, group: "kill" });
-		await eventually(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "");
-		const pid = Number(readFileSync(pidFile, "utf8"));
+		const running = hookRunnerSpawn()(alias(`${shSleeper(pidFile)} & wait`), { cwd: dir, env, signal: controller.signal, group: "kill" });
+		const pid = await pidRead(pidFile);
 		controller.abort();
 		const result = await running;
 		expect(result.code).not.toBe(0);
@@ -77,10 +90,10 @@ describe("hook runner", () => {
 		process.env.INIT_CWD = "/somewhere";
 		process.env.GIT_DIR = "/elsewhere/.git";
 		process.env.SUONETAR_TEST_KEPT = "yes";
-		process.env.PATH = ["/proj/node_modules/.bin", "/usr/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin", saved.PATH].join(":");
+		process.env.PATH = [resolve("/proj/node_modules/.bin"), resolve("/usr/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin"), saved.PATH].join(delimiter);
 		try {
 			const out = join(dir, "env");
-			await hookRunnerSpawn()(alias(`env > ${out}`), { cwd: dir, env: { ...env, EXTRA: "1" }, signal: new AbortController().signal, group: "kill" });
+			await hookRunnerSpawn()(alias(`env > ${shPath(out)}`), { cwd: dir, env: { ...env, EXTRA: "1" }, signal: new AbortController().signal, group: "kill" });
 			const seen = readFileSync(out, "utf8");
 			expect(seen.split("\n").filter((l) => l.startsWith("npm_"))).toEqual(["npm_config_yes=false"]);
 			expect(seen).not.toMatch(/^INIT_CWD=/m);
@@ -95,7 +108,8 @@ describe("hook runner", () => {
 		}
 	});
 
-	test("a cancelled hook gets time to clean up before it is killed", async () => {
+	// Windows has no signal a hook could trap; a cancel kills at once.
+	test.skipIf(WINDOWS)("a cancelled hook gets time to clean up before it is killed", async () => {
 		const cleaned = join(dir, "cleaned");
 		const started = join(dir, "started");
 		const controller = new AbortController();
@@ -111,31 +125,29 @@ describe("hook runner", () => {
 		expect(existsSync(cleaned)).toBe(true);
 	});
 
-	test("with the group left alone, a background child outlives the run and an abort stops only git", async () => {
+	test("with the group left alone, a background child outlives the run and an abort leaves the tool running", async () => {
 		const pidFile = join(dir, "pid");
-		const result = await hookRunnerSpawn()(alias(`sleep 30 > /dev/null 2>&1 & echo $! > ${pidFile}; exit 0`), {
+		const result = await hookRunnerSpawn()(alias(`${shSleeper(pidFile)} > /dev/null 2>&1 & exit 0`), {
 			cwd: dir,
 			env,
 			signal: new AbortController().signal,
 			group: "leave",
 		});
 		expect(result.code).toBe(0);
-		const pid = Number(readFileSync(pidFile, "utf8"));
+		const pid = await pidRead(pidFile);
 		await new Promise((r) => setTimeout(r, 300));
 		expect(alive(pid)).toBe(true);
 		process.kill(pid);
 
-		const started = join(dir, "started");
-		const toolPid = join(dir, "tool");
 		// git stops its own direct child when signalled; the tool, as under `git mergetool`, is that child's child.
+		const toolPid = join(dir, "tool");
 		const controller = new AbortController();
-		const running = hookRunnerSpawn()(alias(`sh -c 'echo $$ > ${toolPid}; touch ${started}; exec sleep 30'; true`), { cwd: dir, env, signal: controller.signal, group: "leave" });
-		await eventually(() => existsSync(started));
+		const running = hookRunnerSpawn()(alias(`${shSleeper(toolPid)}; true`), { cwd: dir, env, signal: controller.signal, group: "leave" });
+		const tool = await pidRead(toolPid);
 		const begun = Date.now();
 		controller.abort();
 		await running;
 		expect(Date.now() - begun).toBeLessThan(2000);
-		const tool = Number(readFileSync(toolPid, "utf8"));
 		await new Promise((r) => setTimeout(r, 300));
 		expect(alive(tool)).toBe(true);
 		process.kill(tool);

@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { draftWithFile } from "./drafts.ts";
 import type { Oid } from "./git.ts";
@@ -7,7 +9,7 @@ import { CatFile } from "./objects.ts";
 import { Session } from "./session.ts";
 import { type DraftEntry, storeRead, storeWrite } from "./store.ts";
 import { beforeReadTree, beforeRefTransaction, repoInterleaved } from "./test-support/interleave.ts";
-import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
+import { type Fixture, lineSet, lines, repoFixture, symlinksWork } from "./test-support/repo.ts";
 
 describe("apply", () => {
 	let fx: Fixture;
@@ -24,9 +26,9 @@ describe("apply", () => {
 		session = await Session.openRepo(fx.repo, undefined);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		session.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	const edited = lineSet(lineSet(lines("a"), 2, "c1"), 5, "suonetar edit");
@@ -138,11 +140,11 @@ describe("apply", () => {
 
 	test("refuses when the branch is also checked out in another worktree", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		fx.git("worktree", "add", "-q", "--force", join(fx.dir, "..", `${fx.dir.split("/").at(-1)}-wt`), "feature");
+		fx.git("worktree", "add", "-q", "--force", join(fx.dir, "..", `${basename(fx.dir)}-wt`), "feature");
 		try {
 			expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		} finally {
-			fx.git("worktree", "remove", "--force", join(fx.dir, "..", `${fx.dir.split("/").at(-1)}-wt`));
+			fx.git("worktree", "remove", "--force", join(fx.dir, "..", `${basename(fx.dir)}-wt`));
 		}
 	});
 
@@ -247,15 +249,19 @@ describe("apply", () => {
 		expect(state.kind === "ready" && state.drafts.length).toBe(1);
 	});
 
-	test("an ignored directory or symlink where the update writes a file is refused", async () => {
-		fx.commit("ignore", { ".gitignore": "build\nlnk\n" });
+	test("an ignored directory where the update writes a file is refused", async () => {
+		fx.commit("ignore", { ".gitignore": "build\n" });
 		const top = fx.git("rev-parse", "HEAD");
 		mkdirSync(join(fx.dir, "build"));
 		fx.write("build/precious.o", "object code\n");
 		await session.draftSetFile(top, "build", Buffer.from("now a file\n"));
 		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(disk("build/precious.o")).toBe("object code\n");
-		await session.draftDiscard(top);
+	});
+
+	test.skipIf(!symlinksWork)("an ignored symlink where the update writes a file is refused", async () => {
+		fx.commit("ignore", { ".gitignore": "lnk\n" });
+		const top = fx.git("rev-parse", "HEAD");
 		symlinkSync("a.txt", join(fx.dir, "lnk"));
 		await session.draftSetFile(top, "lnk", Buffer.from("now a file\n"));
 		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
@@ -268,8 +274,19 @@ describe("apply", () => {
 		fx.git("add", "ro/keep.txt");
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		await session.draftSetFile(c3, "ro/new.txt", Buffer.from("cannot be written\n"));
-		chmodSync(join(fx.dir, "ro"), 0o555);
+		// What stops it: a read-only directory it must write into, or on Windows, which has none, a directory it must replace with a file that some process has as its cwd.
+		let release: () => void;
+		if (process.platform === "win32") {
+			await session.draftSetFile(c3, "ro/keep.txt", null);
+			await session.draftSetFile(c3, "ro", Buffer.from("now a file\n"));
+			const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { cwd: join(fx.dir, "ro") });
+			await once(holder, "spawn");
+			release = () => holder.kill();
+		} else {
+			await session.draftSetFile(c3, "ro/new.txt", Buffer.from("cannot be written\n"));
+			chmodSync(join(fx.dir, "ro"), 0o555);
+			release = () => chmodSync(join(fx.dir, "ro"), 0o755);
+		}
 		try {
 			const result = await session.apply({ kind: "run", skip: [] }, () => undefined);
 			expect(result.kind).toBe("refused");
@@ -277,7 +294,7 @@ describe("apply", () => {
 			expect(fx.git("status", "--porcelain")).toBe("");
 			expect(existsSync(join(fx.dir, ".git", "index.lock"))).toBe(false);
 		} finally {
-			chmodSync(join(fx.dir, "ro"), 0o755);
+			release();
 		}
 	});
 

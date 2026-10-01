@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { MergeInputs } from "./replay.ts";
 import { Session } from "./session.ts";
-import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
+import { dirRemove, type Fixture, lineSet, lines, repoFixture, shPath, shSleeper } from "./test-support/repo.ts";
 
 describe("mergetool", () => {
 	let fx: Fixture;
@@ -37,10 +37,10 @@ describe("mergetool", () => {
 		key = preview.conflicts[0]?.key ?? "";
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		session.close();
-		fx.cleanup();
-		rmSync(tmp, { recursive: true, force: true });
+		await fx.cleanup();
+		await dirRemove(tmp);
 		if (tmpSaved === undefined) {
 			delete process.env.TMPDIR;
 		} else {
@@ -110,9 +110,9 @@ describe("mergetool", () => {
 
 	test("cancelling stops waiting for the tool without killing it, and cleans up", async () => {
 		const pidFile = join(tmp, "tool.pid");
-		toolSet(`sh -c 'echo $$ > "${pidFile}"; exec sleep 30' & touch "${join(fx.dir, "started")}"; wait`, true);
+		toolSet(`${shSleeper(pidFile)} & touch "${shPath(join(fx.dir, "started"))}"; wait`, true);
 		const running = session.mergetool(inputs, key, "a.txt", Buffer.from("current\n"));
-		for (let i = 0; i < 100 && !existsSync(join(fx.dir, "started")); i++) {
+		for (let i = 0; i < 100 && !(existsSync(join(fx.dir, "started")) && existsSync(pidFile) && readFileSync(pidFile, "utf8") !== ""); i++) {
 			await new Promise((r) => setTimeout(r, 20));
 		}
 		session.cancel();

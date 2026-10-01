@@ -1,4 +1,4 @@
-import { symlinkSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { indentationFor } from "./editorconfig.ts";
@@ -14,9 +14,9 @@ describe("indentationFor", () => {
 		cat = new CatFile(fx.repo);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		cat.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	async function indentation(files: Readonly<Record<string, string>>, paths: readonly string[]) {
@@ -87,9 +87,9 @@ describe("indentationFor", () => {
 	test("follows a symlinked config within the tree, and ignores one pointing out of it", async () => {
 		const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		fx.write("shared/ec", "[*]\nindent_size = 3\n");
-		symlinkSync("shared/ec", join(fx.dir, ".editorconfig"));
-		symlinkSync("../../elsewhere", join(fx.dir, "shared", ".editorconfig"));
-		fx.git("add", ".editorconfig", "shared");
+		fx.git("add", "shared");
+		fx.symlinkStage(".editorconfig", "shared/ec");
+		fx.symlinkStage("shared/.editorconfig", "../../elsewhere");
 		const found = await indentation({}, ["a.txt", "shared/b.txt"]);
 		expect(found).toEqual({ "a.txt": { style: undefined, size: 3, tabWidth: 3 }, "shared/b.txt": { style: undefined, size: 3, tabWidth: 3 } });
 		expect(reported).toHaveBeenCalledTimes(1);

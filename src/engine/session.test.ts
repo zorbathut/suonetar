@@ -1,5 +1,5 @@
-import { chmodSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { ErrorEditRefused } from "./errors.ts";
 import type { Oid } from "./git.ts";
@@ -21,9 +21,9 @@ describe("session drafts", () => {
 		session = await Session.openRepo(fx.repo, undefined);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		session.close();
-		fx.cleanup();
+		await fx.cleanup();
 	});
 
 	async function drafts() {
@@ -55,8 +55,9 @@ describe("session drafts", () => {
 
 	test("drafts can add and delete files, and edits keep the file's mode", async () => {
 		fx.write("run.sh", "#!/bin/sh\n");
+		// The file's own bit where the filesystem has one, the index's where it has not (Windows).
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
-		fx.git("add", "run.sh");
+		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho hi\n"));
 		await session.draftSetFile(c3, "new/file.txt", Buffer.from("new\n"));
@@ -71,8 +72,7 @@ describe("session drafts", () => {
 	});
 
 	test("restoring a file takes the whole tree entry, so a deleted symlink comes back as a symlink", async () => {
-		symlinkSync("a.txt", join(fx.dir, "link"));
-		fx.git("add", "link");
+		fx.symlinkStage("link", "a.txt");
 		const c3 = fx.commit("add link", {});
 		fx.git("rm", "-q", "link");
 		const c4 = fx.commit("delete link", {});
@@ -87,8 +87,9 @@ describe("session drafts", () => {
 
 	test("reverting a file to the commit keeps its mode and drops the draft", async () => {
 		fx.write("run.sh", "#!/bin/sh\n");
+		// The file's own bit where the filesystem has one, the index's where it has not (Windows).
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
-		fx.git("add", "run.sh");
+		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c3, "run.sh", null);
 		await session.draftSetFile(c3, "extra.txt", Buffer.from("extra\n"));
@@ -118,8 +119,9 @@ describe("session drafts", () => {
 
 	test("a file the draft emptied out of the commit comes back with its mode", async () => {
 		fx.write("run.sh", "#!/bin/sh\n");
+		// The file's own bit where the filesystem has one, the index's where it has not (Windows).
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
-		fx.git("add", "run.sh");
+		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c3, "run.sh", null);
 		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
@@ -209,10 +211,10 @@ describe("session drafts", () => {
 	});
 
 	test("refuses to edit symlinks and filtered paths", async () => {
-		symlinkSync("a.txt", join(fx.dir, "link"));
+		fx.symlinkStage("link", "a.txt");
 		writeFileSync(join(fx.dir, ".gitattributes"), "*.bin filter=lfs\n");
 		fx.write("x.bin", "pointer\n");
-		fx.git("add", "link", ".gitattributes", "x.bin");
+		fx.git("add", ".gitattributes", "x.bin");
 		const c3 = fx.commit("c3", {});
 		await expect(session.draftSetFile(c3, "link", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
 		await expect(session.draftSetFile(c3, "x.bin", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
@@ -243,7 +245,7 @@ describe("session drafts", () => {
 	});
 
 	test("signs rewritten commits when commit.gpgSign is set", async () => {
-		const stub = join(fx.dir, "..", `${fx.dir.split("/").at(-1)}-gpg.sh`);
+		const stub = join(fx.dir, "..", `${basename(fx.dir)}-gpg.sh`);
 		writeFileSync(
 			stub,
 			'#!/bin/sh\ncat >/dev/null\necho "[GNUPG:] SIG_CREATED D 1 8 00 0 X" >&2\nprintf -- "-----BEGIN PGP SIGNATURE-----\\nfake\\n-----END PGP SIGNATURE-----\\n"\n',
@@ -314,8 +316,7 @@ describe("session drafts", () => {
 	});
 
 	test("files that cannot be edited as text say why in the document", async () => {
-		symlinkSync("a.txt", join(fx.dir, "link"));
-		fx.git("add", "link");
+		fx.symlinkStage("link", "a.txt");
 		const c3 = fx.commit("c3", {});
 		expect((await file(c3, "link")).refusal).toContain("symbolic link");
 		await expect(session.draftSetFile(c3, "link/x", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
