@@ -1,3 +1,4 @@
+import type { Indentation } from "../engine/editorconfig.ts";
 import type { MergeInputs } from "../engine/replay.ts";
 import type {
 	ApplyProgress,
@@ -39,6 +40,8 @@ export type SuonetarApi = {
 	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
 	// Undoes the branch's last Suonetar move, as `SessionState`'s `undo` described it.
 	readonly undo: (old: string, newTip: string, kind: "exact" | "edits") => Promise<Result<Wire<UndoResult>>>;
+	// A path's EditorConfig indentation as of a tree.
+	readonly indentation: (tree: string, path: string) => Promise<Result<Indentation>>;
 	// The configured `merge.tool`, or undefined when there is none.
 	readonly mergetoolName: () => Promise<Result<string | undefined>>;
 	// Opens one path of a content conflict in the merge tool, starting from `content`; waits until the tool is closed or `cancel` is called.

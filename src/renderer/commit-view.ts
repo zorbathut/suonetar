@@ -358,7 +358,7 @@ export class CommitView {
 			s.body.append(el("div", { class: "note", text: note }));
 		}
 		const onChange = codec === undefined ? undefined : this.#onChange(s, codec);
-		s.editor = editorCreate(s.body, { path: f.path, doc, original, editable: codec !== undefined, onChange, extensions: [] });
+		s.editor = editorCreate(s.body, { path: f.path, doc, original, editable: codec !== undefined, onChange, extensions: [], indentation: f.indentation });
 		this.#headerUpdate(s);
 	}
 

@@ -6,10 +6,10 @@ import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/sea
 import { Compartment, EditorState, type Extension, Text } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
+import type { Indentation } from "../engine/editorconfig.ts";
+import type { Wire } from "../shared/api.ts";
+import { editorIndent, editorIndentExtension } from "./indentation.ts";
 import { indentUnitGuess, wrapIndented } from "./wrap-indent.ts";
-
-// CodeMirror's default, which these editors keep.
-const TAB_SIZE = 4;
 
 export type EditorSpec = {
 	readonly path: string;
@@ -19,6 +19,8 @@ export type EditorSpec = {
 	readonly editable: boolean;
 	readonly onChange: (() => void) | undefined;
 	readonly extensions: Extension;
+	// The file's EditorConfig indentation.
+	readonly indentation: Wire<Indentation>;
 };
 
 export function darkMode(): boolean {
@@ -53,8 +55,9 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 		bracketMatching(),
 		rectangularSelection(),
 		highlightActiveLine(),
+		editorIndentExtension(spec.indentation),
 		// Guessed from the original when the file is deleted, so its deleted lines still hang by the file's own unit.
-		wrapIndented(indentUnitGuess((spec.doc === "" ? (spec.original ?? "") : spec.doc).split("\n"), TAB_SIZE)),
+		wrapIndented(indentUnitGuess((spec.doc === "" ? (spec.original ?? "") : spec.doc).split("\n"), editorIndent(spec.indentation).tabSize)),
 		highlightSelectionMatches(),
 		search({ top: true }),
 		keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),

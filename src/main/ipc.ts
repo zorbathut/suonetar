@@ -109,6 +109,7 @@ export type SessionApi = Pick<
 	| "preview"
 	| "apply"
 	| "undo"
+	| "indentation"
 	| "mergetoolName"
 	| "mergetool"
 	| "cancel"
@@ -176,6 +177,7 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 		}
 		return session.undo(argOid(a, 0), argOid(a, 1), kind);
 	});
+	handle("indentation", (a) => session.indentation(argOid(a, 0), argString(a, 1)));
 	handle("mergetoolName", () => session.mergetoolName());
 	handle("mergetool", (a) => session.mergetool(argInputs(a, 0), argString(a, 1), argString(a, 2), bytes(a[3], "argument 3")));
 	handle("cancel", async () => {

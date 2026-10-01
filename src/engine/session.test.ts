@@ -308,4 +308,11 @@ describe("session drafts", () => {
 		expect(sizes(await session.commitDocument(c4))).toMatchObject({ "y.cs": 2 });
 		expect(sizes(await session.draftDocument(c4))).toMatchObject({ ".editorconfig": 2 });
 	});
+
+	test("resolves indentation for any tree and path, as conflict editors need", async () => {
+		const c3 = fx.commit("c3", { ".editorconfig": "[*.cs]\nindent_style = tab\ntab_width = 8\n" });
+		const tree = fx.git("rev-parse", `${c3}^{tree}`);
+		expect(await session.indentation(tree, "src/x.cs")).toEqual({ style: "tab", size: 8, tabWidth: 8 });
+		expect(await session.indentation(tree, "x.txt")).toEqual({ style: undefined, size: undefined, tabWidth: undefined });
+	});
 });

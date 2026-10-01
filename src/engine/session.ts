@@ -401,6 +401,17 @@ export class Session {
 		}
 	}
 
+	// A path's EditorConfig indentation as of `tree`, for editors that show something other than a document file (a conflict's marker file).
+	indentation(tree: Oid, path: string): Promise<Indentation> {
+		return this.#mutex.run(async () => {
+			const found = (await indentationFor(this.repo, this.#cat, tree, [path])).get(path);
+			if (found === undefined) {
+				throw new Error(`no indentation resolved for ${path}`);
+			}
+			return found;
+		});
+	}
+
 	mergetoolName(): Promise<string | undefined> {
 		return this.#mutex.run(() => mergetoolName(this.repo));
 	}

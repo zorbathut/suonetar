@@ -298,7 +298,8 @@ export class ResolveView {
 				const left = conflictBlocks(view.state.doc.toString()).length;
 				counter.textContent = left === 0 ? "no conflict blocks left" : `${left} conflict block${left === 1 ? "" : "s"} left`;
 			};
-			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField] });
+			const indentation = await call(api.indentation(this.#report.markerTree, path));
+			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField], indentation });
 			update();
 			const tool = this.#tool;
 			if (tool !== undefined) {

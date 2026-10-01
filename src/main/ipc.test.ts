@@ -28,6 +28,7 @@ const NAMES: Record<keyof SuonetarApi, true> = {
 	preview: true,
 	apply: true,
 	undo: true,
+	indentation: true,
 	mergetoolName: true,
 	mergetool: true,
 	cancel: true,
