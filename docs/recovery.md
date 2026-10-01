@@ -78,7 +78,8 @@ Apply runs the repository's `pre-commit` hook on every commit it rewrites, befor
 - **PATH.** Suonetar started from a desktop launcher may lack PATH entries a shell profile adds (`~/.cargo/bin`, nvm). Hooks that call such tools then fail; start Suonetar from a shell.
 - **LFS and partial clones.** LFS files are pointer files in the private worktree. In a partial clone, the first checkout of the private worktree fetches every blob it needs.
 - **Cancelling.** Cancel sends the hook's process group SIGTERM, then SIGKILL two seconds later. Containers a Docker-based hook started are outside it and keep running. lint-staged keeps a backup in `refs/stash` while it runs, so a cancel in the middle can leave a "lint-staged automatic backup" entry in `git stash list`; it holds only the hook's view of the commit and can be dropped.
-- **If Suonetar itself is killed mid-hook,** the hook's processes keep running in the private worktree until they finish; the next apply takes over the worktree regardless.
+- **Cancelling on Windows.** Windows has no process groups or SIGTERM: cancel kills the hook and everything it started at once, with no time to clean up. A git command the hook was running can leave its lock file behind (`.git/refs/stash.lock` under lint-staged, `.git/packed-refs.lock`); delete it if git then reports it. Processes a hook leaves running after it exits (a daemon such as `eslint_d` or a Gradle daemon) are not stopped, since Windows no longer links them to the hook.
+- **If Suonetar itself is killed mid-hook,** the hook's processes keep running in the private worktree until they finish. On Linux the next apply takes over the worktree regardless; on Windows a process still running there (or a daemon a hook left behind) can keep the next apply from resetting the worktree until it exits.
 
 ## The merge tool
 

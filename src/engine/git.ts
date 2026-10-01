@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { delimiter, posix } from "node:path";
+import { delimiter, join, posix } from "node:path";
 import { ErrorGit } from "./errors.ts";
 import { reportOnce } from "./report.ts";
 
@@ -20,6 +20,7 @@ export type GitRunner = (args: readonly string[], opts: GitCallOptions) => Promi
 export type HookResult = { readonly code: number | null; readonly output: string };
 
 // Runs `git <args>` for a hook or a tool, in the user's own environment rather than the engine's fixed one. With `group: "kill"` (hooks), the whole process group is killed on abort and cleaned up after exit; with `"leave"` (a merge tool, which may start an IDE the user keeps working in), abort only stops git itself and nothing it started is killed.
+// On Windows there are no process groups: an abort kills the process tree at once, with no grace period, and nothing the hook left running after it exited can be found to kill. A "leave" abort stops nothing there, since killing the `git` launcher would not stop the git it started; the run just stops waiting.
 export type HookRunner = (
 	args: readonly string[],
 	opts: { readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly signal: AbortSignal; readonly group: "kill" | "leave" },
@@ -145,6 +146,24 @@ function groupSignal(pid: number, signal: NodeJS.Signals | 0): { alive: boolean;
 	}
 }
 
+// Kills a process and everything it started, as far as Windows still links them to it. Reports through `problem`, which may come after the run has settled.
+function treeKill(pid: number, problem: (text: string, err: unknown) => void): void {
+	const killer = spawn(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(pid), "/T", "/F"], {
+		stdio: ["ignore", "ignore", "pipe"],
+		windowsHide: true,
+	});
+	const err: Buffer[] = [];
+	killer.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+	killer.on("error", (e) => problem(`stopping the hook's processes failed: ${e.message}`, e));
+	killer.on("close", (code) => {
+		// 128: the process is already gone.
+		if (code !== 0 && code !== 128) {
+			const text = Buffer.concat(err).toString("utf8").trim();
+			problem(`stopping the hook's processes failed: taskkill exited ${code}: ${text}`, text);
+		}
+	});
+}
+
 // The last `limit` bytes of the output, starting at a character boundary.
 function outputTail(chunks: readonly Buffer[], limit: number): string {
 	const all = Buffer.concat(chunks);
@@ -162,8 +181,8 @@ export function hookRunnerSpawn(): HookRunner {
 				resolve({ code: null, output: "" });
 				return;
 			}
-			// Its own process group, so the hook's children (a framework, its interpreter, the formatter) can be killed with it.
-			const child = spawn("git", args, { cwd: opts.cwd, env: envHook(opts.env), stdio: ["ignore", "pipe", "pipe"], detached: true });
+			// Its own process group, so the hook's children (a framework, its interpreter, the formatter) can be killed with it. Not on Windows, where a detached git would give every console program the hook starts a window of its own.
+			const child = spawn("git", args, { cwd: opts.cwd, env: envHook(opts.env), stdio: ["ignore", "pipe", "pipe"], detached: !WINDOWS, windowsHide: true });
 			let chunks: Buffer[] = [];
 			let buffered = 0;
 			const problems: string[] = [];
@@ -189,10 +208,25 @@ export function hookRunnerSpawn(): HookRunner {
 				return result.alive;
 			};
 			let abortedAt: number | undefined;
+			let settled = false;
 			const onAbort = () => {
 				abortedAt = Date.now();
 				if (opts.group === "kill") {
-					signal("SIGTERM");
+					if (!WINDOWS) {
+						signal("SIGTERM");
+					} else if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+						// Only while git runs: Windows reuses process ids quickly.
+						const pid = child.pid;
+						treeKill(pid, (text, err) => {
+							if (settled) {
+								reportOnce(`${pid}\0${text}`, text, err);
+							} else {
+								problems.push(text);
+							}
+						});
+					}
+				} else if (WINDOWS) {
+					finish();
 				} else {
 					// A no-op once git has exited, where signalling its pid could reach a reused one.
 					child.kill("SIGTERM");
@@ -206,24 +240,34 @@ export function hookRunnerSpawn(): HookRunner {
 			let exited = false;
 			let code: number | null = null;
 			let pipesOpen = 2;
-			let settled = false;
-			// Settles on exit rather than on close: a daemon the hook left behind can hold the pipes open indefinitely. After a cancel the group gets its grace period to clean up (lint-staged restores its backup) before SIGKILL.
-			const settle = () => {
-				if (settled || !exited) {
-					return;
-				}
-				const graceLeft = abortedAt === undefined || opts.group === "leave" ? 0 : abortedAt + HOOK_KILL_GRACE_MS - Date.now();
-				if (graceLeft > 0 && signal(0)) {
-					setTimeout(settle, Math.min(100, graceLeft));
+			const finish = () => {
+				if (settled) {
 					return;
 				}
 				settled = true;
 				opts.signal.removeEventListener("abort", onAbort);
 				if (opts.group === "kill") {
-					signal("SIGKILL");
+					if (!WINDOWS) {
+						signal("SIGKILL");
+					}
+					// Whatever still holds the pipes is neither waited for nor collected from.
+					child.stdout.destroy();
+					child.stderr.destroy();
 				}
 				const output = outputTail(chunks, HOOK_OUTPUT_LIMIT) + problems.map((p) => `\n(${p})`).join("");
 				resolve({ code, output });
+			};
+			// Settles on exit rather than on close: a daemon the hook left behind can hold the pipes open indefinitely. After a cancel the group gets its grace period to clean up (lint-staged restores its backup) before SIGKILL.
+			const settle = () => {
+				if (settled || !exited) {
+					return;
+				}
+				const graceLeft = abortedAt === undefined || opts.group === "leave" || WINDOWS ? 0 : abortedAt + HOOK_KILL_GRACE_MS - Date.now();
+				if (graceLeft > 0 && signal(0)) {
+					setTimeout(settle, Math.min(100, graceLeft));
+					return;
+				}
+				finish();
 			};
 			const pipeClosed = () => {
 				pipesOpen -= 1;
