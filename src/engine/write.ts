@@ -70,7 +70,7 @@ export async function treeWithChanges(repo: Repo, baseTree: Oid, changes: readon
 		await gitOk(repo, ["read-tree", baseTree], { env });
 		const directories = changes.flatMap((change) => ("delete" in change && change.delete === "directory" ? [`:(literal)${change.path}`] : []));
 		if (directories.length > 0) {
-			await gitOk(repo, ["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--", ...directories], { env });
+			await gitOk(repo, ["rm", "-r", "-q", "-f", "--cached", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], { input: `${directories.join("\0")}\0`, env });
 		}
 		const nullOid = "0".repeat(baseTree.length);
 		const lines = changes.flatMap((change) => {

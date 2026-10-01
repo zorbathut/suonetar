@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CatFile, commitRead, commitSubject, treeDiff, treeList } from "./objects.ts";
-import { type Fixture, repoFixture } from "./test-support/repo.ts";
+import { type Fixture, repoFixture, treeWide } from "./test-support/repo.ts";
 
 describe("objects", () => {
 	let fx: Fixture;
@@ -24,6 +24,12 @@ describe("objects", () => {
 		expect(a?.data.equals(binary)).toBe(true);
 		expect(missing).toBeUndefined();
 		expect(b?.data.equals(binary)).toBe(true);
+	});
+
+	test("lists more paths than a Windows command line holds", async () => {
+		const { tree, directories } = await treeWide(fx, 400);
+		const entries = await treeList(fx.repo, tree, { recursive: true, paths: directories.map((d) => `:(literal)${d}/f.txt`) });
+		expect(entries.map((e) => e.path).sort()).toEqual(directories.map((d) => `${d}/f.txt`).sort());
 	});
 
 	test("closing rejects reads still waiting for an answer", async () => {

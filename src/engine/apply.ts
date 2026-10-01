@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { ErrorNotOnBranch } from "./errors.ts";
-import { gitOk, gitText, type Oid, type Repo, splitNul } from "./git.ts";
+import { argChunks, gitOk, gitText, type Oid, type Repo, splitNul } from "./git.ts";
 import { type TreeSide, treeDiffRaw } from "./objects.ts";
 import { branchCurrent } from "./stack.ts";
 
@@ -186,7 +186,11 @@ async function ignoredInTheWay(repo: Repo, oldTip: Oid, newTip: Oid): Promise<st
 	if (candidates.size === 0) {
 		return [];
 	}
-	return splitNul(await gitOk(repo, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--", ...[...candidates].map((p) => `:(literal)${p}`)]));
+	const ignored: string[] = [];
+	for (const chunk of argChunks([...candidates].map((p) => `:(literal)${p}`))) {
+		ignored.push(...splitNul(await gitOk(repo, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--", ...chunk])));
+	}
+	return ignored;
 }
 
 function lstatMaybe(path: string): Stats | undefined {

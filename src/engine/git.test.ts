@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { envInherited, fileReaderDisk, hookRunnerSpawn } from "./git.ts";
+import { argChunks, envInherited, fileReaderDisk, hookRunnerSpawn } from "./git.ts";
 import { dirRemove, shPath, shSleeper } from "./test-support/repo.ts";
 
 const WINDOWS = process.platform === "win32";
@@ -194,5 +194,20 @@ describe("fileReaderDisk", () => {
 			reported.mockRestore();
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("argChunks", () => {
+	test("splits a long argument list into runs short enough for a Windows command line, keeping order", () => {
+		const items = Array.from({ length: 1000 }, (_, i) => `${"p".repeat(100)}-${i}`);
+		const chunks = argChunks(items);
+		expect(chunks.length).toBeGreaterThan(1);
+		expect(chunks.flat()).toEqual(items);
+		// Half of Windows' 32K command line, leaving room for git's own arguments and the launcher's re-quoting.
+		for (const chunk of chunks) {
+			expect(chunk.join(" ").length).toBeLessThanOrEqual(16_000);
+		}
+		expect(argChunks(["a", "b"])).toEqual([["a", "b"]]);
+		expect(argChunks([])).toEqual([]);
 	});
 });

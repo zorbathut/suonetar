@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { CatFile, commitRead } from "./objects.ts";
-import { type Fixture, repoFixture } from "./test-support/repo.ts";
-import { commitWrite } from "./write.ts";
+import { type Fixture, repoFixture, treeWide } from "./test-support/repo.ts";
+import { commitWrite, treeWithChanges } from "./write.ts";
 
 describe("commitWrite", () => {
 	let fx: Fixture;
@@ -32,5 +32,28 @@ describe("commitWrite", () => {
 		expect(raw).toContain("author Jos\xe9 <j@example.com> 1700000000 +0100\n");
 		expect(raw).toContain("\nencoding ISO-8859-1\n");
 		expect((await commitRead(cat, rewritten)).message.equals(message)).toBe(true);
+	});
+});
+
+describe("treeWithChanges", () => {
+	let fx: Fixture;
+
+	beforeEach(async () => {
+		fx = await repoFixture();
+	});
+
+	afterEach(async () => {
+		await fx.cleanup();
+	});
+
+	test("deletes more directories than a Windows command line holds", async () => {
+		const { tree, directories } = await treeWide(fx, 400);
+		const kept = directories.pop();
+		const result = await treeWithChanges(
+			fx.repo,
+			tree,
+			directories.map((path) => ({ path, delete: "directory" as const })),
+		);
+		expect(fx.git("ls-tree", "--name-only", result)).toBe(kept);
 	});
 });

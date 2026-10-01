@@ -139,6 +139,18 @@ function runnerIsolated(home: string): GitRunner {
 	return (args, opts) => real(args, { ...opts, env: { ...envIsolated(home), ...opts.env } });
 }
 
+// A tree of `count` files, each in its own directory with a 100-character name, so that 400 of them overflow a Windows command line (32K characters).
+export async function treeWide(fx: Fixture, count: number): Promise<{ tree: string; directories: string[] }> {
+	const directories = Array.from({ length: count }, (_, i) => `${"d".repeat(100)}-${i}`);
+	const env = { GIT_INDEX_FILE: join(fx.dir, ".git", "wide-index") };
+	const blob = (await fx.repo.run(["hash-object", "-w", "--stdin"], { cwd: fx.dir, input: "x\n" })).stdout.toString().trim();
+	const listed = await fx.repo.run(["update-index", "--add", "--index-info"], { cwd: fx.dir, env, input: directories.map((d) => `100644 ${blob}\t${d}/f.txt\n`).join("") });
+	if (listed.code !== 0) {
+		throw new Error(listed.stderr);
+	}
+	return { tree: (await fx.repo.run(["write-tree"], { cwd: fx.dir, env })).stdout.toString().trim(), directories };
+}
+
 // Ten lines, so edits to different lines merge cleanly.
 export function lines(tag: string, count = 10): string {
 	return `${Array.from({ length: count }, (_, i) => `${tag} line ${i + 1}`).join("\n")}\n`;

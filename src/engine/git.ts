@@ -284,6 +284,29 @@ export async function repoOpen(run: GitRunner, runHook: HookRunner, readOutside:
 	return { run, runHook, readOutside, worktree, gitDir, commonDir, envExtra };
 }
 
+// Characters of arguments per command: Windows caps a whole command line at 32K, and the `git` launcher passes it on re-quoted.
+const ARG_CHUNK_CHARS = 16_000;
+
+// Splits arguments (paths, for commands that cannot read them from stdin) into runs that fit one command line, in order.
+export function argChunks(items: readonly string[]): string[][] {
+	const chunks: string[][] = [];
+	let current: string[] = [];
+	let length = 0;
+	for (const item of items) {
+		if (current.length > 0 && length + item.length + 1 > ARG_CHUNK_CHARS) {
+			chunks.push(current);
+			current = [];
+			length = 0;
+		}
+		current.push(item);
+		length += item.length + 1;
+	}
+	if (current.length > 0) {
+		chunks.push(current);
+	}
+	return chunks;
+}
+
 // Splits NUL-terminated output, dropping the empty string after the final terminator.
 export function splitNul(data: Buffer | string): string[] {
 	const text = typeof data === "string" ? data : data.toString("utf8");

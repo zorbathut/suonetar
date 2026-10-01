@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { envGit, gitOk, type Oid, type Repo, splitNul } from "./git.ts";
+import { argChunks, envGit, gitOk, type Oid, type Repo, splitNul } from "./git.ts";
 
 export type ObjectType = "blob" | "tree" | "commit" | "tag";
 export type GitObject = { readonly type: ObjectType; readonly data: Buffer };
@@ -195,8 +195,13 @@ export async function commitRead(cat: CatFile, oid: Oid): Promise<CommitInfo> {
 export type TreeEntry = { readonly mode: string; readonly type: "blob" | "tree" | "commit"; readonly oid: Oid; readonly path: string };
 
 export async function treeList(repo: Repo, treeish: string, opts: { recursive: boolean; paths?: readonly string[] }): Promise<TreeEntry[]> {
-	const args = ["ls-tree", "-z", "--full-tree", ...(opts.recursive ? ["-r"] : []), treeish, ...(opts.paths && opts.paths.length > 0 ? ["--", ...opts.paths] : [])];
-	return splitNul(await gitOk(repo, args)).map((record) => {
+	const args = ["ls-tree", "-z", "--full-tree", ...(opts.recursive ? ["-r"] : []), treeish];
+	const runs = opts.paths && opts.paths.length > 0 ? argChunks(opts.paths).map((chunk) => [...args, "--", ...chunk]) : [args];
+	const records: string[] = [];
+	for (const run of runs) {
+		records.push(...splitNul(await gitOk(repo, run)));
+	}
+	return records.map((record) => {
 		const tab = record.indexOf("\t");
 		const [mode, type, oid] = record.slice(0, tab).split(" ");
 		if (mode === undefined || oid === undefined || (type !== "blob" && type !== "tree" && type !== "commit")) {
