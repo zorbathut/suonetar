@@ -1,0 +1,11 @@
+# Matches the Biome formatter (biome.json): tabs, shown four columns wide.
+root = true
+
+[*]
+indent_style = tab
+indent_size = 4
+
+# Nested Markdown lists are indented with two spaces.
+[*.md]
+indent_style = space
+indent_size = 2
