@@ -25,7 +25,7 @@ npm install
 npm run app -- path/to/repo
 ```
 
-A relative path resolves against the directory npm was run from. Without one, Suonetar starts with no repository and File › Open Repository… (Ctrl+O) picks one; it also switches to another later. A second argument sets the stack's base for that run, as in `npm run app -- path/to/repo origin/core`. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
+A relative path resolves against the directory npm was run from. Without one, Suonetar opens the repository npm was run in; run outside any, it starts with no repository. File › Open Repository… (Ctrl+O) picks one then, or switches to another later. A second argument sets the stack's base for that run, as in `npm run app -- path/to/repo origin/core`. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
 
 On Linux, `npm run desktop` adds a launcher for this checkout to the applications menu, with the icon (`npm run desktop -- --remove` takes it out; run it again after moving the checkout). The launcher runs `npm` from the desktop session's PATH.
 
@@ -69,7 +69,7 @@ npm test        # Vitest; the engine tests drive real git
 npm run dist    # package for this platform into dist/: an AppImage and a tarball on Linux, an installer on Windows
 ```
 
-A packaged build takes the same arguments as `npm run app`: `suonetar-<version>-linux-x86_64.AppImage [<repository> [<base>]]`, or none to start with File › Open Repository…. Pushing a `v*` tag builds both packages on GitHub Actions, once the tests pass, and publishes them as a release; a tag with a suffix such as `v1.2.0-rc1` is marked as a prerelease.
+A packaged build takes the same arguments as `npm run app`: `suonetar-<version>-linux-x86_64.AppImage [<repository> [<base>]]`, or none to open the repository it is run in, if any. Pushing a `v*` tag builds both packages on GitHub Actions, once the tests pass, and publishes them as a release; a tag with a suffix such as `v1.2.0-rc1` is marked as a prerelease.
 
 - `src/engine`: git operations, Node only.
 - `src/main`: the Electron main process, which hosts the engine.

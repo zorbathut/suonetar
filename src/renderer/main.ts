@@ -972,7 +972,7 @@ function welcomeShow(): void {
 			{ class: "blocked" },
 			el("h1", { text: "No repository open" }),
 			el("p", {
-				text: "Open one with File › Open Repository… (Ctrl+O), or start Suonetar with a repository and, if you like, the base for its stack: suonetar <repository> [<base>].",
+				text: "Open one with File › Open Repository… (Ctrl+O), or start Suonetar inside a repository or with its path, and optionally the base for its stack: suonetar [<repository> [<base>]].",
 			}),
 			button("Open Repository…", () => window.suonetarShell.open(), "primary"),
 		),

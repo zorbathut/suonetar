@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
+import { ErrorNotRepository } from "../engine/errors.ts";
 import { Session } from "../engine/session.ts";
 import { argumentsRead } from "./arguments.ts";
 import { ErrorIpcArgument, ipcRegister } from "./ipc.ts";
@@ -167,11 +168,14 @@ function windowCreate(title: string, hooks: WindowHooks): AppWindow {
 	return { win, pageRelease };
 }
 
-// The repository at `path`, or undefined once the user has been told why it cannot be opened.
-async function sessionOpen(path: string, base: string | undefined, parent: BrowserWindow | undefined): Promise<Session | undefined> {
+// The repository at `path`, or undefined once the user has been told why it cannot be opened. A path nobody named (`implied`) that is in no repository at all is not worth telling them about.
+async function sessionOpen(path: string, base: string | undefined, parent: BrowserWindow | undefined, implied = false): Promise<Session | undefined> {
 	try {
 		return await Session.open(path, base);
 	} catch (err) {
+		if (implied && err instanceof ErrorNotRepository) {
+			return undefined;
+		}
 		const message = `Cannot open ${path} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`;
 		if (parent === undefined) {
 			dialog.showErrorBox("Suonetar", message);
@@ -185,8 +189,8 @@ async function sessionOpen(path: string, base: string | undefined, parent: Brows
 async function main(): Promise<void> {
 	await app.whenReady();
 	const args = argumentsRead(process.argv, app.isPackaged, process.env.INIT_CWD, process.cwd());
-	// Without a repository, or with one that cannot be opened, the window starts with none and File › Open Repository… picks one.
-	const initial = args.repo === undefined ? undefined : await sessionOpen(args.repo, args.base, undefined);
+	// Without a repository named, the one the app was run in, if it was run in one. Without either, or with one that cannot be opened, the window starts with none and File › Open Repository… picks one.
+	const initial = args.repo !== undefined ? await sessionOpen(args.repo, args.base, undefined) : await sessionOpen(args.dirInvoked, undefined, undefined, true);
 	const slot: SessionSlot<Session> = new SessionSlot(initial, {
 		release: () => appWindow.pageRelease(),
 		show: (session) => {

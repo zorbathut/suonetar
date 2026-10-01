@@ -21,7 +21,7 @@ export function desktopEntry(checkout: string): string {
 		"Name=Suonetar",
 		"GenericName=Commit Stack Editor",
 		"Comment=Edit any commit in a stack of git commits and restack the ones above it",
-		// %f: a folder handed to the launcher (Open With, or a launch with a path) opens as the repository; from the menu, the window starts with none.
+		// %f: a folder handed to the launcher (Open With, or a launch with a path) opens as the repository; from the menu, it opens the repository holding the directory the desktop starts it in (usually the home directory, so usually none).
 		`Exec=${exec} %f`,
 		"Icon=suonetar",
 		"Terminal=false",
