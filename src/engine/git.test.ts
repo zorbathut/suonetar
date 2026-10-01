@@ -2,8 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { argChunks, envInherited, fileReaderDisk, hookRunnerSpawn } from "./git.ts";
-import { dirRemove, shPath, shSleeper } from "./test-support/repo.ts";
+import { ErrorGit, ErrorNotRepository } from "./errors.ts";
+import { argChunks, envInherited, fileReaderDisk, type GitRunner, hookRunnerSpawn, repoOpen } from "./git.ts";
+import { dirRemove, repoFixture, shPath, shSleeper } from "./test-support/repo.ts";
 
 const WINDOWS = process.platform === "win32";
 
@@ -209,5 +210,51 @@ describe("argChunks", () => {
 		}
 		expect(argChunks(["a", "b"])).toEqual([["a", "b"]]);
 		expect(argChunks([])).toEqual([]);
+	});
+});
+
+describe("repoOpen", () => {
+	test("finds the repository a subdirectory is in", async () => {
+		const fx = await repoFixture();
+		try {
+			mkdirSync(join(fx.dir, "sub"));
+			const repo = await repoOpen(fx.repo.run, fx.repo.runHook, fx.repo.readOutside, join(fx.dir, "sub"));
+			expect(repo.worktree).toBe(fx.repo.worktree);
+		} finally {
+			await fx.cleanup();
+		}
+	});
+
+	test("a directory in no repository is told apart from one git will not open", async () => {
+		const fx = await repoFixture();
+		try {
+			// The ceiling stops git looking up from `plain` into the fixture's repository.
+			const plain = join(fx.dir, "plain");
+			mkdirSync(plain);
+			const run: GitRunner = (args, opts) => fx.repo.run(args, { ...opts, env: { GIT_CEILING_DIRECTORIES: fx.dir, ...opts.env } });
+			await expect(repoOpen(run, fx.repo.runHook, fx.repo.readOutside, plain)).rejects.toBeInstanceOf(ErrorNotRepository);
+
+			// A `.git` file pointing at a worktree since pruned: git says "not a git repository" too, but the user is in one.
+			const pruned = join(fx.dir, "pruned");
+			mkdirSync(pruned);
+			writeFileSync(join(pruned, ".git"), `gitdir: ${join(fx.dir, "gone")}\n`);
+			await expect(repoOpen(run, fx.repo.runHook, fx.repo.readOutside, pruned)).rejects.toBeInstanceOf(ErrorGit);
+
+			const bare = join(fx.dir, "bare.git");
+			fx.git("init", "-q", "--bare", bare);
+			await expect(repoOpen(fx.repo.run, fx.repo.runHook, fx.repo.readOutside, bare)).rejects.toBeInstanceOf(ErrorGit);
+		} finally {
+			await fx.cleanup();
+		}
+	});
+
+	test("stopping at a filesystem boundary is no repository too", async () => {
+		// What git says from a directory on another filesystem than any repository above it, which a test cannot arrange.
+		const run: GitRunner = async () => ({
+			stdout: Buffer.alloc(0),
+			stderr: "fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n",
+			code: 128,
+		});
+		await expect(repoOpen(run, hookRunnerSpawn(), fileReaderDisk(), "/tmp/plain")).rejects.toBeInstanceOf(ErrorNotRepository);
 	});
 });

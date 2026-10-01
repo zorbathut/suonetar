@@ -14,6 +14,14 @@ export class ErrorGit extends Error {
 	}
 }
 
+// No repository at or above the path git was asked about, as against one it found but would not open.
+export class ErrorNotRepository extends Error {
+	constructor(stderr: string) {
+		super(stderr.trim());
+		this.name = "ErrorNotRepository";
+	}
+}
+
 export class ErrorNotOnBranch extends Error {
 	constructor() {
 		super("HEAD is detached; Suonetar edits the stack of the checked-out branch");

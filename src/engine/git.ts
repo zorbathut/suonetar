@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { delimiter, join, posix } from "node:path";
-import { ErrorGit } from "./errors.ts";
+import { ErrorGit, ErrorNotRepository } from "./errors.ts";
 import { reportOnce } from "./report.ts";
 
 export type Oid = string;
@@ -319,6 +319,10 @@ export function fileReaderDisk(): FileReader {
 export async function repoOpen(run: GitRunner, runHook: HookRunner, readOutside: FileReader, path: string, envExtra: Readonly<Record<string, string>> = {}): Promise<Repo> {
 	const probe = await run(["rev-parse", "--show-toplevel", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir"], { cwd: path });
 	if (probe.code !== 0) {
+		// Both the "parent directories" and the "mount point" forms; not a broken `.git` file's "not a git repository: <path>", which is a repository the user is in.
+		if (/^fatal: not a git repository \(or any /m.test(probe.stderr)) {
+			throw new ErrorNotRepository(probe.stderr);
+		}
 		throw new ErrorGit(["rev-parse"], probe.code, probe.stderr);
 	}
 	const [worktree, gitDir, commonDir] = probe.stdout.toString("utf8").trim().split("\n");
