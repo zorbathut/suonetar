@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { draftWithFile } from "./drafts.ts";
@@ -61,6 +61,24 @@ describe("apply", () => {
 		expect(disk("a.txt")).toBe("claude's work in progress\n");
 		const state = await session.state();
 		expect(state.kind === "ready" && state.drafts.length).toBe(1);
+	});
+
+	test("refuses over a same-size edit made in the same second the index was written", async () => {
+		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		// Without ctime to tell them apart (core.trustctime=false, common on network and Windows filesystems), only the index's own mtime marks such an entry as possibly stale.
+		fx.git("config", "core.trustctime", "false");
+		const second = Math.floor(Date.now() / 1000) - 100;
+		const file = join(fx.dir, "a.txt");
+		utimesSync(file, second, second);
+		fx.git("update-index", "--refresh");
+		utimesSync(join(fx.dir, ".git", "index"), second, second);
+		const theirs = disk("a.txt").replace("c1", "C1");
+		writeFileSync(file, theirs);
+		utimesSync(file, second, second);
+		// Plumbing that never writes the index, which would end the race this test sets up.
+		expect(fx.git("diff-files", "--name-only")).toBe("a.txt");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
+		expect(disk("a.txt")).toBe(theirs);
 	});
 
 	test("keeps unrelated uncommitted and staged changes, and ignores touched-but-unchanged files", async () => {

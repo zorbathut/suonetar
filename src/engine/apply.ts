@@ -15,7 +15,9 @@ import {
 	renameSync,
 	rmdirSync,
 	rmSync,
+	statSync,
 	unlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -241,6 +243,13 @@ class LockHeld {
 	}
 }
 
+// Copies the index keeping its mtime, rounded down to the second. Git treats an entry stamped in the same second as the index as possibly stale and compares its contents; a copy stamped later would let a same-size edit made in that second pass as clean, and the update would overwrite it. The original is stat-ed before the copy, so a newer index replacing it in between only makes the copy look older, which is the safe direction.
+function indexCopy(from: string, to: string): void {
+	const seconds = Math.floor(statSync(from).mtimeMs / 1000);
+	copyFileSync(from, to);
+	utimesSync(to, seconds, seconds);
+}
+
 // Moves the checked-out branch from oldTip to newTip and brings the main worktree and index along, under git's own index lock (research §3.2).
 export async function publish(repo: Repo, branch: string, oldTip: Oid, newTip: Oid, reflogMessage: string): Promise<PublishResult> {
 	const pending = intentCheck(repo);
@@ -312,7 +321,7 @@ async function publishLocked(repo: Repo, branch: string, oldTip: Oid, newTip: Oi
 			cleanUp();
 			return { kind: "moved", reason: movedEarly ?? "another process took over index.lock", unreverted: [] };
 		}
-		copyFileSync(join(repo.gitDir, "index"), privateIndex);
+		indexCopy(join(repo.gitDir, "index"), privateIndex);
 		await gitOk(repo, ["update-index", "-q", "--refresh"], { env });
 
 		phaseSet("worktree-updated");
