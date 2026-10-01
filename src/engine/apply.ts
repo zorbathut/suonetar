@@ -21,6 +21,7 @@ import {
 import { dirname, join } from "node:path";
 import { ErrorNotOnBranch } from "./errors.ts";
 import { gitOk, gitText, type Oid, type Repo, splitNul } from "./git.ts";
+import { type TreeSide, treeDiffRaw } from "./objects.ts";
 import { branchCurrent } from "./stack.ts";
 
 // How far an apply got; recorded in the intent file at every transition so a crash can be classified exactly.
@@ -367,8 +368,6 @@ function lockAge(path: string): number {
 	return stat === undefined ? 0 : (Date.now() - stat.mtimeMs) / 1000;
 }
 
-type TreeSide = { readonly mode: string; readonly oid: Oid } | undefined;
-
 // Puts the worktree back to oldTip after it was (perhaps partly) moved to newTip. Only files that still hold exactly newTip's version are touched; anything else was changed by another process and is left alone and returned.
 // `indexUpdated` says whether the private index reached newTip; after a failed forward update it did not, and only the per-file path can tell which files were written.
 async function revertWorktree(repo: Repo, oldTip: Oid, newTip: Oid, env: Record<string, string>, indexUpdated: boolean): Promise<string[]> {
@@ -378,14 +377,7 @@ async function revertWorktree(repo: Repo, oldTip: Oid, newTip: Oid, env: Record<
 			return [];
 		}
 	}
-	// One raw record per changed file: `:<old mode> <new mode> <old oid> <new oid> <status>` then the path.
-	const raw = splitNul(await gitOk(repo, ["diff-tree", "-r", "-z", "--no-renames", oldTip, newTip]));
-	const changes: { path: string; old: TreeSide; new: TreeSide }[] = [];
-	for (let i = 0; i + 1 < raw.length; i += 2) {
-		const [oldMode, newMode, oldOid, newOid] = (raw[i] as string).slice(1).split(" ") as [string, string, string, string];
-		const side = (mode: string, oid: string): TreeSide => (/^0+$/.test(mode) ? undefined : { mode, oid });
-		changes.push({ path: raw[i + 1] as string, old: side(oldMode, oldOid), new: side(newMode, newOid) });
-	}
+	const changes = await treeDiffRaw(repo, oldTip, newTip);
 	const unreverted: string[] = [];
 	const removals: string[] = [];
 	const restores: { path: string; side: { mode: string; oid: Oid } }[] = [];

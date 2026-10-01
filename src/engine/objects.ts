@@ -240,6 +240,23 @@ export async function treeDiff(repo: Repo, from: Oid, to: Oid): Promise<FileChan
 	return changes;
 }
 
+export type TreeSide = { readonly mode: string; readonly oid: Oid } | undefined;
+
+export type TreeChangeRaw = { readonly path: string; readonly old: TreeSide; readonly new: TreeSide };
+
+// Per-file changes between two trees with both sides' modes and object ids; undefined marks the side where the file does not exist.
+export async function treeDiffRaw(repo: Repo, from: Oid, to: Oid): Promise<TreeChangeRaw[]> {
+	// One raw record per changed file: `:<old mode> <new mode> <old oid> <new oid> <status>` then the path.
+	const raw = splitNul(await gitOk(repo, ["diff-tree", "-r", "-z", "--no-renames", from, to]));
+	const changes: TreeChangeRaw[] = [];
+	for (let i = 0; i + 1 < raw.length; i += 2) {
+		const [oldMode, newMode, oldOid, newOid] = (raw[i] as string).slice(1).split(" ") as [string, string, string, string];
+		const side = (mode: string, oid: string): TreeSide => (/^0+$/.test(mode) ? undefined : { mode, oid });
+		changes.push({ path: raw[i + 1] as string, old: side(oldMode, oldOid), new: side(newMode, newOid) });
+	}
+	return changes;
+}
+
 export type TreeObjectEntry = { readonly mode: string; readonly name: string; readonly oid: Oid };
 
 // Parses a raw tree object (`<mode> <name>\0<binary oid>` repeated); used where spawning ls-tree per tree would be wasteful.
