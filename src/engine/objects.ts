@@ -16,7 +16,7 @@ export class CatFile {
 	#failure: Error | undefined;
 
 	constructor(repo: Repo) {
-		this.#child = spawn("git", ["cat-file", "--batch"], { cwd: repo.worktree, env: envGit(repo.envExtra) });
+		this.#child = spawn("git", ["cat-file", "--batch"], { cwd: repo.worktree, env: envGit(repo.envExtra), windowsHide: true });
 		this.#child.stdout.on("data", (chunk: Buffer) => {
 			this.#chunks.push(chunk);
 			this.#buffered += chunk.length;

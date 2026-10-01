@@ -83,7 +83,7 @@ export function gitRunnerSpawn(): GitRunner {
 	return (args, opts) =>
 		new Promise((resolve, reject) => {
 			const hasInput = opts.input !== undefined;
-			const child = spawn("git", args, { cwd: opts.cwd, env: envGit(opts.env), stdio: [hasInput ? "pipe" : "ignore", "pipe", "pipe"] });
+			const child = spawn("git", args, { cwd: opts.cwd, env: envGit(opts.env), stdio: [hasInput ? "pipe" : "ignore", "pipe", "pipe"], windowsHide: true });
 			const out: Buffer[] = [];
 			const err: Buffer[] = [];
 			let stdinError = "";
