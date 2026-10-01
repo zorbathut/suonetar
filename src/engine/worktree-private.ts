@@ -82,6 +82,7 @@ export class WorktreePrivate {
 			cwd: this.path,
 			env: { ...this.#repo.envExtra, GIT_INDEX_FILE: this.indexPath, GIT_EDITOR: ":" },
 			signal,
+			group: "kill",
 		});
 	}
 

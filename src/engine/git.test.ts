@@ -50,6 +50,7 @@ describe("hook runner", () => {
 			cwd: dir,
 			env,
 			signal: new AbortController().signal,
+			group: "kill",
 		});
 		expect(Date.now() - started).toBeLessThan(5000);
 		expect(result.code).toBe(3);
@@ -61,7 +62,7 @@ describe("hook runner", () => {
 	test("aborting kills the hook and its children", async () => {
 		const pidFile = join(dir, "pid");
 		const controller = new AbortController();
-		const running = hookRunnerSpawn()(alias(`sleep 30 & echo $! > ${pidFile}; wait`), { cwd: dir, env, signal: controller.signal });
+		const running = hookRunnerSpawn()(alias(`sleep 30 & echo $! > ${pidFile}; wait`), { cwd: dir, env, signal: controller.signal, group: "kill" });
 		await eventually(() => existsSync(pidFile) && readFileSync(pidFile, "utf8").trim() !== "");
 		const pid = Number(readFileSync(pidFile, "utf8"));
 		controller.abort();
@@ -79,7 +80,7 @@ describe("hook runner", () => {
 		process.env.PATH = ["/proj/node_modules/.bin", "/usr/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin", saved.PATH].join(":");
 		try {
 			const out = join(dir, "env");
-			await hookRunnerSpawn()(alias(`env > ${out}`), { cwd: dir, env: { ...env, EXTRA: "1" }, signal: new AbortController().signal });
+			await hookRunnerSpawn()(alias(`env > ${out}`), { cwd: dir, env: { ...env, EXTRA: "1" }, signal: new AbortController().signal, group: "kill" });
 			const seen = readFileSync(out, "utf8");
 			expect(seen.split("\n").filter((l) => l.startsWith("npm_"))).toEqual(["npm_config_yes=false"]);
 			expect(seen).not.toMatch(/^INIT_CWD=/m);
@@ -98,10 +99,45 @@ describe("hook runner", () => {
 		const cleaned = join(dir, "cleaned");
 		const started = join(dir, "started");
 		const controller = new AbortController();
-		const running = hookRunnerSpawn()(alias(`trap 'sleep 0.5; touch ${cleaned}; exit 1' TERM; touch ${started}; sleep 30 & wait`), { cwd: dir, env, signal: controller.signal });
+		const running = hookRunnerSpawn()(alias(`trap 'sleep 0.5; touch ${cleaned}; exit 1' TERM; touch ${started}; sleep 30 & wait`), {
+			cwd: dir,
+			env,
+			signal: controller.signal,
+			group: "kill",
+		});
 		await eventually(() => existsSync(started));
 		controller.abort();
 		await running;
 		expect(existsSync(cleaned)).toBe(true);
+	});
+
+	test("with the group left alone, a background child outlives the run and an abort stops only git", async () => {
+		const pidFile = join(dir, "pid");
+		const result = await hookRunnerSpawn()(alias(`sleep 30 > /dev/null 2>&1 & echo $! > ${pidFile}; exit 0`), {
+			cwd: dir,
+			env,
+			signal: new AbortController().signal,
+			group: "leave",
+		});
+		expect(result.code).toBe(0);
+		const pid = Number(readFileSync(pidFile, "utf8"));
+		await new Promise((r) => setTimeout(r, 300));
+		expect(alive(pid)).toBe(true);
+		process.kill(pid);
+
+		const started = join(dir, "started");
+		const toolPid = join(dir, "tool");
+		// git stops its own direct child when signalled; the tool, as under `git mergetool`, is that child's child.
+		const controller = new AbortController();
+		const running = hookRunnerSpawn()(alias(`sh -c 'echo $$ > ${toolPid}; touch ${started}; exec sleep 30'; true`), { cwd: dir, env, signal: controller.signal, group: "leave" });
+		await eventually(() => existsSync(started));
+		const begun = Date.now();
+		controller.abort();
+		await running;
+		expect(Date.now() - begun).toBeLessThan(2000);
+		const tool = Number(readFileSync(toolPid, "utf8"));
+		await new Promise((r) => setTimeout(r, 300));
+		expect(alive(tool)).toBe(true);
+		process.kill(tool);
 	});
 });

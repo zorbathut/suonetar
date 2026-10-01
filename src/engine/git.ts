@@ -17,10 +17,10 @@ export type GitRunner = (args: readonly string[], opts: GitCallOptions) => Promi
 // A hook's exit code and its whole transcript (stdout and stderr interleaved as they arrived); `code` is null when a signal ended it.
 export type HookResult = { readonly code: number | null; readonly output: string };
 
-// Runs `git <args>` for a hook: the user's own environment rather than the engine's fixed one, and the whole process group cleaned up afterwards.
+// Runs `git <args>` for a hook or a tool, in the user's own environment rather than the engine's fixed one. With `group: "kill"` (hooks), the whole process group is killed on abort and cleaned up after exit; with `"leave"` (a merge tool, which may start an IDE the user keeps working in), abort only stops git itself and nothing it started is killed.
 export type HookRunner = (
 	args: readonly string[],
-	opts: { readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly signal: AbortSignal },
+	opts: { readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly signal: AbortSignal; readonly group: "kill" | "leave" },
 ) => Promise<HookResult>;
 
 export type Repo = {
@@ -154,7 +154,12 @@ export function hookRunnerSpawn(): HookRunner {
 			let abortedAt: number | undefined;
 			const onAbort = () => {
 				abortedAt = Date.now();
-				signal("SIGTERM");
+				if (opts.group === "kill") {
+					signal("SIGTERM");
+				} else {
+					// A no-op once git has exited, where signalling its pid could reach a reused one.
+					child.kill("SIGTERM");
+				}
 			};
 			opts.signal.addEventListener("abort", onAbort, { once: true });
 			child.on("error", (err) => {
@@ -170,14 +175,16 @@ export function hookRunnerSpawn(): HookRunner {
 				if (settled || !exited) {
 					return;
 				}
-				const graceLeft = abortedAt === undefined ? 0 : abortedAt + HOOK_KILL_GRACE_MS - Date.now();
+				const graceLeft = abortedAt === undefined || opts.group === "leave" ? 0 : abortedAt + HOOK_KILL_GRACE_MS - Date.now();
 				if (graceLeft > 0 && signal(0)) {
 					setTimeout(settle, Math.min(100, graceLeft));
 					return;
 				}
 				settled = true;
 				opts.signal.removeEventListener("abort", onAbort);
-				signal("SIGKILL");
+				if (opts.group === "kill") {
+					signal("SIGKILL");
+				}
 				const output = outputTail(chunks, HOOK_OUTPUT_LIMIT) + problems.map((p) => `\n(${p})`).join("");
 				resolve({ code, output });
 			};
