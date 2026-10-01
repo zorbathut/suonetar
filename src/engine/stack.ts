@@ -30,7 +30,7 @@ export type Stack = {
 	readonly generation: string;
 };
 
-const BASE_CANDIDATES = ["refs/heads/main", "refs/heads/master", "refs/remotes/origin/main", "refs/remotes/origin/master"];
+const BASE_FALLBACKS = ["refs/heads/main", "refs/heads/master", "refs/remotes/origin/main", "refs/remotes/origin/master"];
 
 async function revParse(repo: Repo, rev: string): Promise<Oid | undefined> {
 	const result = await repo.run(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { cwd: repo.worktree });
@@ -64,10 +64,26 @@ export async function branchCurrent(repo: Repo): Promise<string> {
 	return result.stdout.toString("utf8").trim();
 }
 
-// The base whose merge-base with the tip is newest: after `git fetch && git rebase origin/main` with a stale local main, origin/main is the right base.
+// Remotes whose default branch can be a base: the conventional names for the hosting remote. Any other remote's HEAD (a laptop, a backup repository) may be a feature branch that already contains the tip, which would hide unmerged commits.
+const BASE_REMOTES = ["origin", "upstream"];
+
+// The default branch of origin and upstream (`refs/remotes/<remote>/HEAD`, set by clone and fetch) and its local counterpart, then `init.defaultBranch` for repositories without a remote, then main and master.
+async function baseCandidates(repo: Repo, branch: string): Promise<string[]> {
+	// for-each-ref skips a HEAD left dangling by a pruned default; base detection then falls back rather than failing.
+	const heads = await gitText(repo, ["for-each-ref", "--format=%(symref)", ...BASE_REMOTES.map((r) => `refs/remotes/${r}/HEAD`)]);
+	const remoteDefaults = heads
+		.split("\n")
+		.filter((ref) => ref !== "")
+		.flatMap((ref) => [ref, ref.replace(/^refs\/remotes\/[^/]+\//, "refs/heads/")]);
+	const defaultBranch = await configGet(repo, "init.defaultBranch");
+	const configured = defaultBranch === undefined ? [] : [`refs/heads/${defaultBranch}`];
+	return [...new Set([...remoteDefaults, ...configured, ...BASE_FALLBACKS])].filter((ref) => ref !== branch);
+}
+
+// The base whose merge-base with the tip is newest. After `git fetch && git rebase origin/main` with a stale local main, origin/main is the right base; on the default branch itself, its remote copy is, so the stack is the unpushed commits.
 async function baseFind(repo: Repo, branch: string, tipOid: Oid): Promise<{ ref: string; mergeBase: Oid }> {
 	const configured = await configGet(repo, "suonetar.base");
-	const candidates = configured !== undefined ? [configured] : BASE_CANDIDATES.filter((ref) => ref !== branch);
+	const candidates = configured !== undefined ? [configured] : await baseCandidates(repo, branch);
 	let best: { ref: string; mergeBase: Oid } | undefined;
 	for (const ref of candidates) {
 		if ((await revParse(repo, ref)) === undefined) {

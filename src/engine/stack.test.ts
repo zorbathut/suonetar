@@ -64,6 +64,77 @@ describe("stackRead", () => {
 		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
 	});
 
+	test("on the remote's default branch itself, the stack is the unpushed commits", async () => {
+		fx.git("switch", "-q", "-c", "dev");
+		const pushed = fx.commit("pushed", { "a.txt": "pushed\n" });
+		fx.git("update-ref", "refs/remotes/origin/dev", pushed);
+		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
+		let stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/remotes/origin/dev");
+		expect(stack.commits).toEqual([]);
+		const local = fx.commit("local", { "a.txt": "local\n" });
+		stack = await stackRead(fx.repo, cat);
+		expect(stack.baseOid).toBe(pushed);
+		expect(stack.commits.map((c) => c.oid)).toEqual([local]);
+	});
+
+	test("a branch forked from the remote's default branch starts at the fork", async () => {
+		fx.git("switch", "-q", "-c", "dev");
+		const devWork = fx.commit("dev work", { "d.txt": "d\n" });
+		fx.git("update-ref", "refs/remotes/upstream/dev", devWork);
+		fx.git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/dev");
+		fx.git("switch", "-q", "-c", "feature");
+		const mine = fx.commit("mine", { "a.txt": "mine\n" });
+		const stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/remotes/upstream/dev");
+		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
+	});
+
+	test("another remote's HEAD that already contains the branch does not hide its commits", async () => {
+		fx.git("update-ref", "refs/remotes/origin/main", fx.git("rev-parse", "main"));
+		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+		fx.git("switch", "-q", "-c", "feature");
+		const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+		fx.git("update-ref", "refs/remotes/laptop/feature", f1);
+		fx.git("symbolic-ref", "refs/remotes/laptop/HEAD", "refs/remotes/laptop/feature");
+		const stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/remotes/origin/main");
+		expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
+	});
+
+	test("a branch forked from a local copy of the remote default with unpushed work starts at the fork", async () => {
+		fx.git("switch", "-q", "-c", "dev");
+		const pushed = fx.commit("pushed", { "a.txt": "pushed\n" });
+		fx.git("update-ref", "refs/remotes/origin/dev", pushed);
+		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
+		fx.commit("unpushed on dev", { "d.txt": "d\n" });
+		fx.git("switch", "-q", "-c", "feature");
+		const mine = fx.commit("mine", { "a.txt": "mine\n" });
+		const stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/heads/dev");
+		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
+	});
+
+	test("a remote HEAD left dangling by a pruned default falls back instead of failing", async () => {
+		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone");
+		fx.git("switch", "-q", "-c", "feature");
+		const mine = fx.commit("mine", { "a.txt": "mine\n" });
+		const stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/heads/main");
+		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
+	});
+
+	test("init.defaultBranch names a base when there is no remote", async () => {
+		fx.git("branch", "-m", "trunk");
+		fx.git("config", "init.defaultBranch", "trunk");
+		const base = fx.git("rev-parse", "HEAD");
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		const stack = await stackRead(fx.repo, cat);
+		expect(stack.baseRef).toBe("refs/heads/trunk");
+		expect(stack.baseOid).toBe(base);
+	});
+
 	test("refuses a detached HEAD", async () => {
 		fx.git("switch", "-q", "--detach", "HEAD");
 		await expect(stackRead(fx.repo, cat)).rejects.toBeInstanceOf(ErrorNotOnBranch);

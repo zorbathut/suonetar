@@ -271,7 +271,13 @@ function blockedFor(state: Exclude<SessionState, Ready>): void {
 // Builds the view a decision asks for; the previous view is already gone.
 async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: string | undefined): Promise<void> {
 	if (decision.kind === "empty" || ready === undefined) {
-		blockedShow("The stack is empty", ["There are no commits between the base and the branch tip."]);
+		const stack = ready?.stack;
+		const where =
+			stack === undefined ? "There are no commits between the base and the branch tip." : `${branchShort(stack.branch)} has no commits above ${branchShort(stack.baseRef)}.`;
+		blockedShow("Nothing to edit", [
+			where,
+			"New commits show up here as they are made. To edit commits that are already pushed, set `git config suonetar.base <ref>` to an older base.",
+		]);
 		stackRedraw();
 		return;
 	}

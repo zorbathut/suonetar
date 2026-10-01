@@ -29,7 +29,7 @@ export function stackSummary(ready: Ready): StackSummary {
 }
 
 export function branchShort(ref: string): string {
-	return ref.replace(/^refs\/heads\//, "");
+	return ref.replace(/^refs\/(heads|remotes)\//, "");
 }
 
 function draftDescribe(status: DraftStatus): string {
@@ -42,7 +42,7 @@ function draftDescribe(status: DraftStatus): string {
 		case "conflict":
 			return `“${subject}” was rewritten and this edit no longer applies to it: ${status.reason}`;
 		case "orphan":
-			return `“${subject}” is no longer in the stack.`;
+			return `“${subject}” is no longer in the stack: it was dropped, or pushed or merged below the base. To edit pushed commits, set \`git config suonetar.base <ref>\` to an older base.`;
 		case "elsewhere":
 			return `“${subject}”, made on branch ${branchShort(status.draft.meta.branch)}.`;
 		default: {
@@ -80,7 +80,7 @@ export function stackRender(container: HTMLElement, ready: Ready, selected: stri
 		);
 		rows.append(row);
 	}
-	const base = el("div", { class: "stack-base", text: `on ${stack.baseRef.replace(/^refs\/(heads|remotes)\//, "")} at ${stack.baseOid.slice(0, 7)}` });
+	const base = el("div", { class: "stack-base", text: `on ${branchShort(stack.baseRef)} at ${stack.baseOid.slice(0, 7)}` });
 	const parts: HTMLElement[] = [base, rows];
 	if (stack.frozenBelow !== undefined) {
 		parts.unshift(el("div", { class: "note", text: `The stack starts above merge ${stack.frozenBelow.slice(0, 7)}; commits below it are not editable.` }));
