@@ -1,0 +1,34 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # The engine tests drive real git and use commands from recent releases, which the runner image's git can lag behind.
+      - name: Install current git
+        run: |
+          sudo add-apt-repository -y ppa:git-core/ppa
+          sudo apt-get update
+          sudo apt-get install -y git
+          git --version
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # Neither the check nor the tests start Electron, so its binary is not downloaded.
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
