@@ -163,10 +163,6 @@ export class Session {
 	}
 
 	static async openRepo(repo: Repo): Promise<Session> {
-		// Every commit Suonetar replaces stays reachable from the reflog; a year instead of git's 30 days, so nothing it rewrote is pruned soon.
-		if ((await configGet(repo, "gc.reflogExpireUnreachable")) === undefined) {
-			await gitOk(repo, ["config", "--local", "gc.reflogExpireUnreachable", "1.year"]);
-		}
 		return new Session(repo, new CatFile(repo));
 	}
 

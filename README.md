@@ -54,7 +54,7 @@ The repository is re-read every second, and before every operation. When the age
 ## What it writes
 
 - Drafts and conflict resolutions in `refs/suonetar/drafts`, which has its own reflog.
-- Every commit it replaces stays in the branch reflog. On first use it sets `gc.reflogExpireUnreachable=1.year` in the repository's config so those are kept a year rather than 30 days. Its reflog entries read `suonetar: apply 3 commits from <old tip>`.
+- Every commit it replaces stays in the branch reflog, as after a rebase, until git prunes it (`gc.reflogExpireUnreachable`, 30 days by default). Its reflog entries read `suonetar: apply 3 commits from <old tip>`.
 - `.git/suonetar/`: an intent file while an apply runs (left behind if one is interrupted), the private worktree pre-commit hooks run in (also listed by `git worktree list`), and throwaway directories while a merge tool is open.
 
 [docs/recovery.md](docs/recovery.md) covers recovering from an interrupted apply, undoing by hand, and the private worktree and merge tool in detail.

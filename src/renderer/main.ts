@@ -494,7 +494,7 @@ function draftAct(what: string, fn: () => ReturnType<typeof api.draftConfirm>): 
 }
 
 function draftDiscard(status: DraftStatus): void {
-	void ask("Discard this edit?", `The stored edit to “${status.draft.meta.subject}” is deleted. It stays in the store's reflog (refs/suonetar/drafts) for a year.`, [
+	void ask("Discard this edit?", `The stored edit to “${status.draft.meta.subject}” is deleted. It stays in the store's reflog (refs/suonetar/drafts) for 30 days by default.`, [
 		{ label: "Discard", value: "discard" },
 		{ label: "Keep it", value: "keep", primary: true },
 	]).then((answer) => {

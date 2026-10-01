@@ -52,7 +52,7 @@ If the branch is somewhere else entirely, another process moved it. Suonetar's r
 ## What survives what
 
 - Drafts and conflict resolutions live under `refs/suonetar/drafts`, survive `git gc --prune=now`, and the ref has its own reflog, so discarded drafts stay recoverable (`.git/logs/refs/suonetar/drafts` lists every state; `git reflog` does not display them because they are trees, not commits).
-- Every commit Suonetar replaces stays in the branch reflog; Suonetar sets `gc.reflogExpireUnreachable=1.year` in the repository's config so they are kept that long. `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` removes them.
+- Every commit Suonetar replaces stays in the branch reflog until `git gc` prunes it, after `gc.reflogExpireUnreachable` (30 days by default), as with a rebase. So do the stored drafts' old states. `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` removes them.
 
 ## Undoing by hand
 
