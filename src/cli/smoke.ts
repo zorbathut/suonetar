@@ -48,8 +48,12 @@ try {
 		const dir = mkdtempSync(join(tmpdir(), "suonetar-smoke-"));
 		const file = join(dir, basename(path));
 		writeFileSync(file, versions.draft ?? "");
-		// $EDITOR may carry arguments (`code --wait`), so it goes through the shell, with the file passed as a positional parameter.
-		const editor = spawnSync("sh", ["-c", `${process.env.VISUAL ?? process.env.EDITOR ?? "vi"} "$1"`, "--", file], { stdio: "inherit" });
+		// $EDITOR may carry arguments (`code --wait`), so it goes through the shell, with the file passed as a positional parameter. Windows has no sh to rely on; there cmd gets the path in quotes, good enough for a development tool (cmd still expands `%VAR%` inside them).
+		const editorCommand = process.env.VISUAL ?? process.env.EDITOR;
+		const editor =
+			process.platform === "win32"
+				? spawnSync(`${editorCommand ?? "notepad"} "${file}"`, { shell: true, stdio: "inherit" })
+				: spawnSync("sh", ["-c", `${editorCommand ?? "vi"} "$1"`, "--", file], { stdio: "inherit" });
 		if (editor.status !== 0) {
 			throw new Error(`editor exited ${editor.status}`);
 		}
