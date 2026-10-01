@@ -28,7 +28,8 @@ function commitAt(summary: StackSummary, index: number | undefined): ViewDecisio
 
 // Decides what to show after the session state changed.
 export function viewDecide(summary: StackSummary, shown: ViewShown, selected: (CommitIdentity & { readonly index: number }) | undefined): ViewDecision {
-	const followed = () => commitAt(summary, selected === undefined ? 0 : reselect(selected, summary.commits));
+	// With nothing selected yet, the newest commit: usually the work just done.
+	const followed = () => commitAt(summary, selected === undefined ? summary.commits.length - 1 : reselect(selected, summary.commits));
 	switch (shown.kind) {
 		case "resolve":
 		case "hook":

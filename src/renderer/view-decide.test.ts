@@ -40,8 +40,9 @@ describe("viewDecide", () => {
 		expect(viewDecide(summary({ commits: [] }), { kind: "hook" }, sel(0))).toEqual({ kind: "keep" });
 	});
 
-	it("starts at the oldest commit, and reports an empty stack", () => {
-		expect(viewDecide(summary(), { kind: "none" }, undefined)).toEqual({ kind: "commit", oid: "o1", readOnly: false });
+	it("starts at the newest commit, and reports an empty stack", () => {
+		expect(viewDecide(summary(), { kind: "none" }, undefined)).toEqual({ kind: "commit", oid: "o3", readOnly: false });
+		expect(viewDecide(summary({ commits: [] }), { kind: "none" }, undefined)).toEqual({ kind: "empty" });
 		expect(viewDecide(summary({ commits: [] }), { kind: "blocked" }, sel(1))).toEqual({ kind: "empty" });
 		expect(viewDecide(summary({ commits: [] }), { kind: "commit", oid: "o2", readOnly: false }, sel(1))).toEqual({ kind: "empty" });
 	});
