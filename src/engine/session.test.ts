@@ -230,13 +230,15 @@ describe("session drafts", () => {
 		expect(fx.git("cat-file", "commit", "HEAD~1")).toContain("gpgsig");
 		expect(fx.git("log", "-1", "--format=%an <%ae> %at", "HEAD~1")).toBe(fx.git("log", "-1", "--format=%an <%ae> %at", c1));
 	});
-	test("generation changes when the branch moves or a draft is saved", async () => {
+	test("generation changes when the branch moves, a draft is saved, or a push or fetch moves a remote branch", async () => {
 		const first = await session.generation();
 		await session.draftSetFile(c1, "a.txt", Buffer.from("draft\n"));
 		const second = await session.generation();
 		fx.commit("c3", { "c.txt": "c\n" });
 		const third = await session.generation();
-		expect(new Set([first, second, third]).size).toBe(3);
+		fx.git("update-ref", "refs/remotes/origin/feature", c1);
+		const fourth = await session.generation();
+		expect(new Set([first, second, third, fourth]).size).toBe(4);
 	});
 
 	test("an edit saved against a commit rewritten meanwhile is kept and offered for confirmation", async () => {

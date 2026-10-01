@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { intentCheck, type PublishResult, preflightPosition, publish } from "./apply.ts";
 import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
@@ -148,7 +149,7 @@ export class Session {
 		return this.#mutex.run(async () => this.close());
 	}
 
-	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, or the configured base changes.
+	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, the configured base changes, or any branch moves (a push or fetch changes the base and what is pushed).
 	generation(): Promise<string> {
 		return this.#mutex.run(async () => {
 			const symbolic = await this.repo.run(["symbolic-ref", "-q", "HEAD"], { cwd: this.repo.worktree });
@@ -164,6 +165,10 @@ export class Session {
 				head.stdout.toString("utf8").trim(),
 				(await storeRefOid(this.repo)) ?? "",
 				(await configGet(this.repo, "suonetar.base")) ?? "",
+				// Every branch, local and remote: the base and the pushed marks follow them.
+				createHash("sha1")
+					.update(await gitOk(this.repo, ["for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/heads", "refs/remotes"]))
+					.digest("hex"),
 			];
 			return parts.join(" ");
 		});
