@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { delimiter } from "node:path";
+import { delimiter, posix } from "node:path";
 import { ErrorGit } from "./errors.ts";
 import { reportOnce } from "./report.ts";
 
@@ -65,9 +65,10 @@ export function envInherited(parent: Readonly<Record<string, string | undefined>
 				continue;
 			}
 			if (ENV_APPIMAGE_LISTS.includes(key)) {
-				const kept = value.split(delimiter).filter((entry) => !inside(entry));
+				// AppImages exist only on Linux, so these lists are colon-separated whatever platform reads them.
+				const kept = value.split(posix.delimiter).filter((entry) => !inside(entry));
 				if (kept.length > 0) {
-					env[key] = kept.join(delimiter);
+					env[key] = kept.join(posix.delimiter);
 				}
 				continue;
 			}
