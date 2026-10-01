@@ -407,6 +407,22 @@ textarea.message {
 	padding: 0 6px;
 }
 
+/* Continuation rows of a wrapped line hang at the column `--wrap-indent` gives (see wrap-indent.ts), capped at half the editor's width so a deeply indented line in a narrow pane still has room. Every unit resolves to px, which CodeMirror's selection drawing needs when it reads the computed value. */
+.cm-editor {
+	container-type: inline-size;
+}
+
+.cm-lineWrapping .cm-line,
+.cm-lineWrapping .cm-deletedChunk > .cm-deletedLine {
+	text-indent: min(var(--wrap-indent, 0ch), 50cqw) hanging;
+}
+
+/* The button floats over the top right of a deleted chunk, or of the line after a chunk that only inserts; that line wraps short of it rather than under it. */
+.cm-deletedChunk > .cm-chunkButtons + .cm-deletedLine,
+.cm-deletedChunk:not(:has(.cm-deletedLine)) + .cm-line {
+	padding-right: 110px;
+}
+
 .cm-conflict-marker {
 	background: var(--marker-bg);
 }
