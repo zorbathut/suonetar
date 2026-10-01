@@ -33,7 +33,7 @@ describe("undo", () => {
 		c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
 		c3 = fx.commit("c3", { "c.txt": lineSet(lines("c"), 2, "c3") });
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 	});
 
 	afterEach(() => {
@@ -169,7 +169,7 @@ describe("undo", () => {
 		const k1 = fx.commit("k1", { "a.txt": lineSet(lines("a"), 2, "k1") });
 		const k2 = fx.commit("k2", { "a.txt": lineSet(lineSet(lines("a"), 2, "k1"), 3, "k2") });
 		session.close();
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		await session.draftSetFile(k1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "k1"), 3, "edit")));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {

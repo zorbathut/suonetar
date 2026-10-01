@@ -145,6 +145,8 @@ function draftsHere(drafts: readonly DraftStatus[]): boolean {
 
 export class Session {
 	readonly repo: Repo;
+	// The base chosen on the command line, which wins over `suonetar.base` and detection.
+	readonly #base: string | undefined;
 	readonly #cat: CatFile;
 	readonly #mutex: Mutex;
 	readonly #hookCache: HookCache = new Map();
@@ -152,18 +154,23 @@ export class Session {
 	// The merge tool being waited for, which holds a throwaway directory until it returns.
 	#tool: Promise<MergetoolOutcome> | undefined;
 
-	private constructor(repo: Repo, cat: CatFile) {
+	private constructor(repo: Repo, cat: CatFile, base: string | undefined) {
 		this.repo = repo;
+		this.#base = base;
 		this.#cat = cat;
 		this.#mutex = mutexFor(repo);
 	}
 
-	static async open(path: string): Promise<Session> {
-		return Session.openRepo(await repoOpen(gitRunnerSpawn(), hookRunnerSpawn(), fileReaderDisk(), path));
+	static async open(path: string, base: string | undefined): Promise<Session> {
+		return Session.openRepo(await repoOpen(gitRunnerSpawn(), hookRunnerSpawn(), fileReaderDisk(), path), base);
 	}
 
-	static async openRepo(repo: Repo): Promise<Session> {
-		return new Session(repo, new CatFile(repo));
+	static async openRepo(repo: Repo, base: string | undefined): Promise<Session> {
+		return new Session(repo, new CatFile(repo), base);
+	}
+
+	#stackRead(): Promise<Stack> {
+		return stackRead(this.repo, this.#cat, this.#base);
 	}
 
 	close(): void {
@@ -214,7 +221,7 @@ export class Session {
 				return pending;
 			}
 			try {
-				const stack = await stackRead(this.repo, this.#cat);
+				const stack = await this.#stackRead();
 				const store = await storeRead(this.repo, this.#cat);
 				const drafts = await draftsResolve(this.repo, stack, store.drafts);
 				return { kind: "ready", stack, drafts, undo: await this.#undoInfo(stack, drafts) };
@@ -316,7 +323,7 @@ export class Session {
 
 	draftConfirm(against: Oid): Promise<void> {
 		return this.#mutex.run(async () => {
-			const stack = await stackRead(this.repo, this.#cat);
+			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
 			const status = (await draftsResolve(this.repo, stack, store.drafts)).find((s) => s.draft.meta.against === against);
 			if (status?.kind !== "rebased") {
@@ -475,7 +482,7 @@ export class Session {
 			if (pending) {
 				return pending;
 			}
-			const stack = await stackRead(this.repo, this.#cat);
+			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
 			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, store.drafts)));
 			const info = assessed?.info;
@@ -619,7 +626,7 @@ export class Session {
 	}
 
 	async #plan(): Promise<{ stack: Stack; preview: PreviewResult; steps?: readonly ReplayStep[]; applied: DraftEntry[] }> {
-		const stack = await stackRead(this.repo, this.#cat);
+		const stack = await this.#stackRead();
 		const store = await storeRead(this.repo, this.#cat);
 		const statuses = await draftsResolve(this.repo, stack, store.drafts);
 		const blocking = statuses.filter((s) => s.kind === "rebased" || s.kind === "conflict");

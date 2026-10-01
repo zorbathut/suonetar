@@ -7,4 +7,3 @@
 - A list-then-fetch `commitDocument`, if commits grow big enough to need it; the target repository's largest recent commit is 59 files and under 800 KiB.
 - A desktop launcher: a `.desktop` file installed under `~/.local/share/applications`, carrying the icon in `resources/`. It must be named for the window's app ID (`suonetar.desktop`, from package.json's `name`) or carry a matching `StartupWMClass`, or the desktop treats the launcher and the running window as different apps. The window shows the icon without one.
 - GitHub Actions that build and publish a release for Windows and Linux when a tag is pushed.
-- Setting the base from the command line, beside `suonetar.base` in git config.

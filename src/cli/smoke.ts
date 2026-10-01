@@ -11,7 +11,7 @@ if (repoPath === undefined || command === undefined) {
 	process.exit(2);
 }
 
-const session = await Session.open(repoPath);
+const session = await Session.open(repoPath, undefined);
 try {
 	const state = await session.state();
 	if (state.kind !== "ready") {

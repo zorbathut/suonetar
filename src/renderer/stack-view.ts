@@ -50,7 +50,7 @@ function draftDescribe(status: DraftStatus): string {
 		case "conflict":
 			return `“${subject}” was rewritten and this edit no longer applies to it: ${status.reason}`;
 		case "orphan":
-			return `“${subject}” is no longer in the stack: it was dropped or merged below the base, or the branch has new unpushed commits and the stack shows only those. In the last case the edit returns once the branch is pushed; to edit it now, set \`git config suonetar.base <ref>\` to an older base.`;
+			return `“${subject}” is no longer in the stack: it was dropped or merged below the base, or the branch has new unpushed commits and the stack shows only those. In the last case the edit returns once the branch is pushed; to edit it now, give an older base after the repository on the command line, or set \`git config suonetar.base <ref>\`.`;
 		case "elsewhere":
 			return `“${subject}”, made on branch ${branchShort(status.draft.meta.branch)}.`;
 		default: {

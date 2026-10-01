@@ -25,11 +25,11 @@ npm install
 npm run app -- path/to/repo
 ```
 
-A relative path resolves against the directory npm was run from. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
+A relative path resolves against the directory npm was run from. A second argument sets the stack's base for that run, as in `npm run app -- path/to/repo origin/core`. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
 
 ## Using it
 
-**The stack.** The left pane lists the commits on the checked-out branch above its base, newest first as `git log` lists them, opening on the newest. When the branch is on the server (where `git push` sends it, or a branch of the same name on `origin` or `upstream`) and has commits that aren't there yet, the base is that copy, so the stack is your unpushed work. Otherwise, when everything is pushed or nothing is, the base is where the branch left the default branch of `origin` or `upstream` (or its local copy, `init.defaultBranch`, `main`, `master`); on the default branch itself that leaves nothing to edit. Commits already on a remote are marked *pushed*, since rewriting them means a force-push. The base moves as commits are made and pushed: an edit to a commit that drops below it is kept and listed, and comes back once the branch is pushed. To edit further back, set the base explicitly:
+**The stack.** The left pane lists the commits on the checked-out branch above its base, newest first as `git log` lists them, opening on the newest. When the branch is on the server (where `git push` sends it, or a branch of the same name on `origin` or `upstream`) and has commits that aren't there yet, the base is that copy, so the stack is your unpushed work. Otherwise, when everything is pushed or nothing is, the base is where the branch left the default branch of `origin` or `upstream` (or its local copy, `init.defaultBranch`, `main`, `master`); on the default branch itself that leaves nothing to edit. Commits already on a remote are marked *pushed*, since rewriting them means a force-push. The base moves as commits are made and pushed: an edit to a commit that drops below it is kept and listed, and comes back once the branch is pushed. To edit further back, give the base after the repository on the command line, or set it for the repository:
 
 ```sh
 git config suonetar.base origin/main

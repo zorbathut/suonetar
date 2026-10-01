@@ -90,11 +90,13 @@ async function branchCopies(repo: Repo, branch: string): Promise<string[]> {
 }
 
 // The base whose merge-base with the tip is newest, competing the branch's own copies on the server, while it has commits they lack, against the default branch's; on a tie the copy wins. So a branch with unpushed work stacks just that work, and a fully pushed one shows everything since it left the default branch. After `git fetch && git rebase origin/main` with a stale local main or a stale copy, origin/main is the right base; on the default branch itself, its remote copy is, so the stack is the unpushed commits.
-async function baseFind(repo: Repo, branch: string, tipOid: Oid): Promise<{ ref: string; mergeBase: Oid }> {
-	const configured = await configGet(repo, "suonetar.base");
+// An explicit base, from the caller or else `suonetar.base`, replaces detection.
+async function baseFind(repo: Repo, branch: string, tipOid: Oid, base: string | undefined): Promise<{ ref: string; mergeBase: Oid }> {
+	const configuredRef = base ?? (await configGet(repo, "suonetar.base"));
+	const configured = configuredRef === undefined ? undefined : { ref: configuredRef, by: base !== undefined ? ("caller" as const) : ("config" as const) };
 	const candidates =
 		configured !== undefined
-			? [{ ref: configured, copy: false }]
+			? [{ ref: configured.ref, copy: false }]
 			: [...(await branchCopies(repo, branch)).map((ref) => ({ ref, copy: true })), ...(await baseCandidates(repo, branch)).map((ref) => ({ ref, copy: false }))];
 	let best: { ref: string; mergeBase: Oid } | undefined;
 	for (const { ref, copy } of candidates) {
@@ -115,20 +117,21 @@ async function baseFind(repo: Repo, branch: string, tipOid: Oid): Promise<{ ref:
 		}
 	}
 	if (best === undefined) {
-		throw new ErrorNoBase(branch.replace(/^refs\/heads\//, ""));
+		throw new ErrorNoBase(branch.replace(/^refs\/heads\//, ""), configured === undefined ? { kind: "undetected" } : { kind: "chosen", ...configured });
 	}
 	return best;
 }
 
-export async function stackRead(repo: Repo, cat: CatFile): Promise<Stack> {
+// `base`, when given, is the ref the user chose to start the stack at.
+export async function stackRead(repo: Repo, cat: CatFile, base: string | undefined): Promise<Stack> {
 	const branch = await branchCurrent(repo);
 	const tipOid = await revParse(repo, branch);
 	if (tipOid === undefined) {
-		throw new ErrorNoBase(branch.replace(/^refs\/heads\//, ""));
+		throw new ErrorNoBase(branch.replace(/^refs\/heads\//, ""), { kind: "unborn" });
 	}
-	const base = await baseFind(repo, branch, tipOid);
+	const found = await baseFind(repo, branch, tipOid, base);
 
-	const rows = (await gitText(repo, ["rev-list", "--first-parent", "--reverse", "--parents", `${base.mergeBase}..${tipOid}`])).split("\n").filter((row) => row !== "");
+	const rows = (await gitText(repo, ["rev-list", "--first-parent", "--reverse", "--parents", `${found.mergeBase}..${tipOid}`])).split("\n").filter((row) => row !== "");
 	let frozenBelow: Oid | undefined;
 	let start = 0;
 	rows.forEach((row, index) => {
@@ -140,7 +143,7 @@ export async function stackRead(repo: Repo, cat: CatFile): Promise<Stack> {
 	});
 	const oids = rows.slice(start).map((row) => row.split(" ")[0] as string);
 
-	const unpublished = new Set((await gitText(repo, ["rev-list", tipOid, "--not", base.mergeBase, "--remotes"])).split("\n"));
+	const unpublished = new Set((await gitText(repo, ["rev-list", tipOid, "--not", found.mergeBase, "--remotes"])).split("\n"));
 	const commits: StackCommit[] = [];
 	for (const oid of oids) {
 		const info = await commitRead(cat, oid);
@@ -160,9 +163,9 @@ export async function stackRead(repo: Repo, cat: CatFile): Promise<Stack> {
 			published: !unpublished.has(oid),
 		});
 	}
-	const baseOid = commits[0]?.parent ?? frozenBelow ?? base.mergeBase;
+	const baseOid = commits[0]?.parent ?? frozenBelow ?? found.mergeBase;
 	const leftBehind = commits[0] === undefined ? [] : await branchesContaining(repo, commits[0].oid, branch);
-	return { branch, tipOid, baseRef: base.ref, baseOid, commits, frozenBelow, leftBehind, generation: `${tipOid}:${baseOid}` };
+	return { branch, tipOid, baseRef: found.ref, baseOid, commits, frozenBelow, leftBehind, generation: `${tipOid}:${baseOid}` };
 }
 
 async function branchesContaining(repo: Repo, oid: Oid, except: string): Promise<string[]> {

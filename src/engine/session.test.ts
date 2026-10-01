@@ -18,7 +18,7 @@ describe("session drafts", () => {
 		fx.git("switch", "-q", "-c", "feature");
 		c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 	});
 
 	afterEach(() => {
@@ -77,7 +77,7 @@ describe("session drafts", () => {
 		fx.git("rm", "-q", "link");
 		const c4 = fx.commit("delete link", {});
 		session.close();
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		await session.draftRestore(c4, "link", "parent");
 		expect((await file(c4, "link")).status).toBe("=");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
@@ -144,7 +144,7 @@ describe("session drafts", () => {
 		session.close();
 		fx.git("reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all");
 		fx.git("gc", "-q", "--prune=now");
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		expect((await file(c1, "a.txt")).draft?.toString()).toBe("precious draft\n");
 		expect(fx.git("log", "--all", "--format=%s")).not.toContain("suonetar");
 	});
@@ -179,6 +179,21 @@ describe("session drafts", () => {
 		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
 		fx.git("update-ref", "refs/remotes/origin/feature", c3);
 		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
+	});
+
+	test("a session opened with a base uses it, and one that names no commit is unavailable with a reason that names it", async () => {
+		const based = await Session.openRepo(fx.repo, c1);
+		const bad = await Session.openRepo(fx.repo, "origin/nope");
+		try {
+			const state = await based.state();
+			expect(state.kind === "ready" && state.stack.commits.map((c) => c.oid)).toEqual([c2]);
+			const refused = await bad.state();
+			expect(refused.kind).toBe("unavailable");
+			expect(refused.kind === "unavailable" && refused.reason).toContain("origin/nope");
+		} finally {
+			based.close();
+			bad.close();
+		}
 	});
 
 	test("a message draft conflicts once the commit is reworded elsewhere", async () => {

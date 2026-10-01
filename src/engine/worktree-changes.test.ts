@@ -123,7 +123,7 @@ describe("worktree changes", () => {
 		fx.write("a.txt", "a staged\n");
 		fx.git("add", "a.txt");
 		fx.write("b.txt", "b unstaged\n");
-		const session = await Session.openRepo(fx.repo);
+		const session = await Session.openRepo(fx.repo, undefined);
 		try {
 			expect(await session.worktreeStatus()).toMatchObject({ staged: 1, unstaged: 1, conflicted: false });
 			const staged = await session.worktreeDocument("staged");

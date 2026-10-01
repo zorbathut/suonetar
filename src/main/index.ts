@@ -1,16 +1,11 @@
 import { join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
 import { Session } from "../engine/session.ts";
+import { argumentsRead } from "./arguments.ts";
 import { ipcRegister } from "./ipc.ts";
 
 function log(message: string, err: unknown): void {
 	console.error(`suonetar: ${message}:`, err);
-}
-
-// The repository is the first non-flag argument, relative to where `npm run` was invoked (npm itself runs scripts from the package root).
-function repoArgument(): string {
-	const args = process.argv.slice(app.isPackaged ? 1 : 2).filter((a) => !a.startsWith("-"));
-	return resolve(process.env.INIT_CWD ?? process.cwd(), args[0] ?? ".");
 }
 
 // Rendered from icon.svg, since Electron cannot load SVG: `rsvg-convert -w 256 -h 256 resources/icon.svg -o resources/icon.png`.
@@ -132,10 +127,11 @@ function windowCreate(repoPath: string): BrowserWindow {
 async function main(): Promise<void> {
 	await app.whenReady();
 	Menu.setApplicationMenu(null);
-	const repoPath = repoArgument();
+	const args = argumentsRead(process.argv, app.isPackaged, process.env.INIT_CWD, process.cwd());
+	const repoPath = args.repo ?? resolve(process.env.INIT_CWD ?? process.cwd(), ".");
 	let session: Session;
 	try {
-		session = await Session.open(repoPath);
+		session = await Session.open(repoPath, args.base);
 	} catch (err) {
 		dialog.showErrorBox("Suonetar", `Cannot open ${repoPath} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`);
 		app.quit();

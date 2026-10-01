@@ -319,7 +319,7 @@ async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: s
 			stack === undefined ? "There are no commits between the base and the branch tip." : `${branchShort(stack.branch)} has no commits above ${branchShort(stack.baseRef)}.`;
 		blockedShow("Nothing to edit", [
 			where,
-			"New commits show up here as they are made. To edit commits that are already pushed, set `git config suonetar.base <ref>` to an older base.",
+			"New commits show up here as they are made. To edit commits that are already pushed, give an older base after the repository on the command line, or set `git config suonetar.base <ref>`.",
 		]);
 		stackRedraw();
 		return;

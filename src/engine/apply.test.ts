@@ -21,7 +21,7 @@ describe("apply", () => {
 		fx.git("switch", "-q", "-c", "feature");
 		c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 	});
 
 	afterEach(() => {
@@ -34,7 +34,7 @@ describe("apply", () => {
 
 	async function sessionWith(predicate: (args: readonly string[]) => boolean, action: () => void | Promise<void>): Promise<Session> {
 		session.close();
-		session = await Session.openRepo(repoInterleaved(fx.repo, predicate, action));
+		session = await Session.openRepo(repoInterleaved(fx.repo, predicate, action), undefined);
 		return session;
 	}
 
@@ -293,7 +293,7 @@ describe("apply", () => {
 			},
 		};
 		session.close();
-		session = await Session.openRepo(failing);
+		session = await Session.openRepo(failing, undefined);
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		calls = 0;
 		await expect(session.apply({ kind: "run", skip: [] }, () => undefined)).rejects.toThrow("EAGAIN");

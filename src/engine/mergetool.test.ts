@@ -27,7 +27,7 @@ describe("mergetool", () => {
 		fx.git("switch", "-q", "-c", "feature");
 		const k1 = fx.commit("k1", { "a.txt": baseText });
 		fx.commit("k2", { "a.txt": theirsText });
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		await session.draftSetFile(k1, "a.txt", Buffer.from(oursText));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
@@ -97,7 +97,7 @@ describe("mergetool", () => {
 		const c1 = fx.commit("c1", { "f.crlf": "one\n" });
 		fx.commit("c2", { "f.crlf": "two\n" });
 		session.close();
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		await session.draftSetFile(c1, "f.crlf", Buffer.from("mine\n"));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
@@ -132,7 +132,7 @@ describe("mergetool", () => {
 		const c1 = fx.commit("c1", { "b.txt": "b\n" });
 		fx.commit("c2", { "sub/n.txt": "c2\n" });
 		session.close();
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 		await session.draftSetFile(c1, "sub/n.txt", Buffer.from("mine\n"));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {

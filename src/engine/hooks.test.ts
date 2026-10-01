@@ -24,7 +24,7 @@ describe("pre-commit hooks at apply", () => {
 		c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
 		c3 = fx.commit("c3", { "c.txt": lineSet(lines("c"), 2, "c3") });
-		session = await Session.openRepo(fx.repo);
+		session = await Session.openRepo(fx.repo, undefined);
 	});
 
 	afterEach(() => {

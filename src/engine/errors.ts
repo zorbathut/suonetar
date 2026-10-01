@@ -21,9 +21,27 @@ export class ErrorNotOnBranch extends Error {
 	}
 }
 
+// Why a branch has no base: none was found, the one the user chose (by the caller, or in `suonetar.base`) does not work, or the branch has no commits at all.
+export type NoBaseCause = { readonly kind: "undetected" } | { readonly kind: "chosen"; readonly ref: string; readonly by: "caller" | "config" } | { readonly kind: "unborn" };
+
+function noBaseMessage(branch: string, cause: NoBaseCause): string {
+	switch (cause.kind) {
+		case "undetected":
+			return `No base for branch '${branch}': give one after the repository on the command line, or set 'git config suonetar.base <ref>'`;
+		case "chosen":
+			return `The base '${cause.ref}' ${cause.by === "caller" ? "given on the command line" : "set in suonetar.base"} is not a commit that branch '${branch}' shares history with`;
+		case "unborn":
+			return `Branch '${branch}' has no commits yet`;
+		default: {
+			const never: never = cause;
+			throw new Error(`unknown cause ${String(never)}`);
+		}
+	}
+}
+
 export class ErrorNoBase extends Error {
-	constructor(branch: string) {
-		super(`No base for branch '${branch}': set one with 'git config suonetar.base <ref>'`);
+	constructor(branch: string, cause: NoBaseCause) {
+		super(noBaseMessage(branch, cause));
 		this.name = "ErrorNoBase";
 	}
 }

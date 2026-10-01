@@ -24,7 +24,7 @@ describe("stackRead", () => {
 		fx.git("switch", "-q", "-c", "feature");
 		const c1 = fx.commit("one", { "a.txt": "1\n" });
 		const c2 = fx.commit("two", { "b.txt": "2\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.branch).toBe("refs/heads/feature");
 		expect(stack.baseRef).toBe("refs/heads/main");
 		expect(stack.baseOid).toBe(base);
@@ -39,19 +39,19 @@ describe("stackRead", () => {
 		fx.git("branch", "-m", "master");
 		fx.git("switch", "-q", "-c", "feature");
 		fx.commit("one", { "a.txt": "1\n" });
-		expect((await stackRead(fx.repo, cat)).baseRef).toBe("refs/heads/master");
+		expect((await stackRead(fx.repo, cat, undefined)).baseRef).toBe("refs/heads/master");
 
 		const mid = fx.git("rev-parse", "HEAD");
 		fx.git("branch", "mid", mid);
 		fx.commit("two", { "a.txt": "2\n" });
 		fx.git("config", "suonetar.base", "mid");
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseOid).toBe(mid);
 		expect(stack.commits).toHaveLength(1);
 
 		fx.git("config", "--unset", "suonetar.base");
 		fx.git("switch", "-q", "master");
-		await expect(stackRead(fx.repo, cat)).rejects.toBeInstanceOf(ErrorNoBase);
+		await expect(stackRead(fx.repo, cat, undefined)).rejects.toBeInstanceOf(ErrorNoBase);
 	});
 
 	test("prefers a remote base whose merge-base is newer than the stale local one", async () => {
@@ -59,7 +59,7 @@ describe("stackRead", () => {
 		const upstreamWork = fx.commit("someone else's work on main", { "u.txt": "u\n" });
 		fx.git("update-ref", "refs/remotes/origin/main", upstreamWork);
 		const mine = fx.commit("mine", { "a.txt": "mine\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/remotes/origin/main");
 		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
 	});
@@ -69,11 +69,11 @@ describe("stackRead", () => {
 		const pushed = fx.commit("pushed", { "a.txt": "pushed\n" });
 		fx.git("update-ref", "refs/remotes/origin/dev", pushed);
 		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev");
-		let stack = await stackRead(fx.repo, cat);
+		let stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/remotes/origin/dev");
 		expect(stack.commits).toEqual([]);
 		const local = fx.commit("local", { "a.txt": "local\n" });
-		stack = await stackRead(fx.repo, cat);
+		stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseOid).toBe(pushed);
 		expect(stack.commits.map((c) => c.oid)).toEqual([local]);
 	});
@@ -85,7 +85,7 @@ describe("stackRead", () => {
 		fx.git("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/dev");
 		fx.git("switch", "-q", "-c", "feature");
 		const mine = fx.commit("mine", { "a.txt": "mine\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/remotes/upstream/dev");
 		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
 	});
@@ -97,7 +97,7 @@ describe("stackRead", () => {
 		const f1 = fx.commit("f1", { "a.txt": "f1\n" });
 		fx.git("update-ref", "refs/remotes/laptop/feature", f1);
 		fx.git("symbolic-ref", "refs/remotes/laptop/HEAD", "refs/remotes/laptop/feature");
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/remotes/origin/main");
 		expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
 	});
@@ -110,7 +110,7 @@ describe("stackRead", () => {
 		fx.commit("unpushed on dev", { "d.txt": "d\n" });
 		fx.git("switch", "-q", "-c", "feature");
 		const mine = fx.commit("mine", { "a.txt": "mine\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/heads/dev");
 		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
 	});
@@ -119,7 +119,7 @@ describe("stackRead", () => {
 		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone");
 		fx.git("switch", "-q", "-c", "feature");
 		const mine = fx.commit("mine", { "a.txt": "mine\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/heads/main");
 		expect(stack.commits.map((c) => c.oid)).toEqual([mine]);
 	});
@@ -130,7 +130,7 @@ describe("stackRead", () => {
 		const base = fx.git("rev-parse", "HEAD");
 		fx.git("switch", "-q", "-c", "feature");
 		fx.commit("one", { "a.txt": "1\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.baseRef).toBe("refs/heads/trunk");
 		expect(stack.baseOid).toBe(base);
 	});
@@ -147,7 +147,7 @@ describe("stackRead", () => {
 			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
 			fx.git("update-ref", "refs/remotes/origin/feature", f1);
 			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
 			expect(stack.commits.map((c) => c.oid)).toEqual([f2]);
 		});
@@ -156,7 +156,7 @@ describe("stackRead", () => {
 			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
 			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
 			fx.git("update-ref", "refs/remotes/origin/feature", f2);
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/main");
 			expect(stack.commits.map((c) => c.oid)).toEqual([f1, f2]);
 			expect(stack.commits.every((c) => c.published)).toBe(true);
@@ -169,7 +169,7 @@ describe("stackRead", () => {
 			fx.git("config", "branch.feature.remote", "origin");
 			fx.git("config", "branch.feature.merge", "refs/heads/me/wip");
 			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/me/wip");
 			expect(stack.commits.map((c) => c.oid)).toEqual([f2]);
 		});
@@ -178,7 +178,7 @@ describe("stackRead", () => {
 			fx.git("config", "branch.feature.remote", "origin");
 			fx.git("config", "branch.feature.merge", "refs/heads/feature");
 			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/main");
 			expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
 		});
@@ -187,7 +187,7 @@ describe("stackRead", () => {
 			const parent = fx.commit("parent work", { "p.txt": "p\n" });
 			fx.git("switch", "-q", "-c", "child", "--track", "feature");
 			const c1 = fx.commit("c1", { "a.txt": "c1\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/main");
 			expect(stack.commits.map((c) => c.oid)).toEqual([parent, c1]);
 		});
@@ -198,7 +198,7 @@ describe("stackRead", () => {
 			fx.git("update-ref", "refs/remotes/origin/dev", dev);
 			fx.git("switch", "-q", "-c", "cut", "--track", "origin/dev");
 			const c1 = fx.commit("c1", { "a.txt": "c1\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/main");
 			expect(stack.commits.map((c) => c.oid)).toEqual([dev, c1]);
 		});
@@ -206,7 +206,7 @@ describe("stackRead", () => {
 		test("wins a tie with the default branch", async () => {
 			fx.git("update-ref", "refs/remotes/origin/feature", "HEAD");
 			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
 			expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
 		});
@@ -220,7 +220,7 @@ describe("stackRead", () => {
 			fx.git("switch", "-q", "feature");
 			fx.git("rebase", "-q", "origin/main");
 			const rebased = fx.git("rev-parse", "HEAD");
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/main");
 			expect(stack.commits.map((c) => c.oid)).toEqual([rebased]);
 		});
@@ -232,16 +232,41 @@ describe("stackRead", () => {
 			fx.git("commit", "-q", "--amend", "-m", "f2 amended");
 			const amended = fx.git("rev-parse", "HEAD");
 			const f3 = fx.commit("f3", { "a.txt": "f3\n" });
-			const stack = await stackRead(fx.repo, cat);
+			const stack = await stackRead(fx.repo, cat, undefined);
 			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
 			expect(stack.baseOid).toBe(f1);
 			expect(stack.commits.map((c) => c.oid)).toEqual([amended, f3]);
 		});
 	});
 
+	test("a base given by the caller wins over suonetar.base and detection", async () => {
+		fx.git("switch", "-q", "-c", "feature");
+		const c1 = fx.commit("one", { "a.txt": "1\n" });
+		fx.git("branch", "core", c1);
+		const c2 = fx.commit("two", { "a.txt": "2\n" });
+		fx.git("config", "suonetar.base", "main");
+		const stack = await stackRead(fx.repo, cat, "core");
+		expect(stack.baseRef).toBe("core");
+		expect(stack.baseOid).toBe(c1);
+		expect(stack.commits.map((c) => c.oid)).toEqual([c2]);
+	});
+
+	test("a base that names no commit is refused with a reason that names it", async () => {
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		const fromCaller = await stackRead(fx.repo, cat, "origin/nope").catch((err: unknown) => err);
+		fx.git("config", "suonetar.base", "nope");
+		const fromConfig = await stackRead(fx.repo, cat, undefined).catch((err: unknown) => err);
+		expect(fromCaller).toBeInstanceOf(ErrorNoBase);
+		expect(fromConfig).toBeInstanceOf(ErrorNoBase);
+		expect(String(fromCaller)).toContain("origin/nope");
+		expect(String(fromConfig)).toContain("nope");
+		expect(String(fromCaller).replace("origin/nope", "nope")).not.toBe(String(fromConfig));
+	});
+
 	test("refuses a detached HEAD", async () => {
 		fx.git("switch", "-q", "--detach", "HEAD");
-		await expect(stackRead(fx.repo, cat)).rejects.toBeInstanceOf(ErrorNotOnBranch);
+		await expect(stackRead(fx.repo, cat, undefined)).rejects.toBeInstanceOf(ErrorNotOnBranch);
 	});
 
 	test("cuts the stack at a merge, keeping the merge as the base", async () => {
@@ -253,7 +278,7 @@ describe("stackRead", () => {
 		fx.git("merge", "-q", "--no-edit", "main");
 		const merge = fx.git("rev-parse", "HEAD");
 		const c1 = fx.commit("after merge", { "a.txt": "after\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.frozenBelow).toBe(merge);
 		expect(stack.baseOid).toBe(merge);
 		expect(stack.commits.map((c) => c.oid)).toEqual([c1]);
@@ -264,7 +289,7 @@ describe("stackRead", () => {
 		const c1 = fx.commit("pushed", { "a.txt": "1\n" });
 		fx.git("update-ref", "refs/remotes/fork/feature", c1);
 		fx.commit("local", { "a.txt": "2\n" });
-		const stack = await stackRead(fx.repo, cat);
+		const stack = await stackRead(fx.repo, cat, undefined);
 		expect(stack.commits.map((c) => c.published)).toEqual([true, false]);
 	});
 
@@ -274,6 +299,6 @@ describe("stackRead", () => {
 		fx.git("branch", "backup", c1);
 		fx.commit("two", { "a.txt": "2\n" });
 		fx.git("branch", "unrelated", "main");
-		expect((await stackRead(fx.repo, cat)).leftBehind).toEqual(["backup"]);
+		expect((await stackRead(fx.repo, cat, undefined)).leftBehind).toEqual(["backup"]);
 	});
 });
