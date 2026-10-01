@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ErrorGit } from "./errors.ts";
 import type { Oid, Repo } from "./git.ts";
 import type { ConflictStage } from "./merge.ts";
+import { reportOnce } from "./report.ts";
 import { configGet } from "./stack.ts";
 
 export type MergetoolResult =
@@ -26,6 +28,9 @@ export async function mergetoolRun(
 ): Promise<MergetoolResult> {
 	if ((await mergetoolName(repo)) === undefined) {
 		return { kind: "unconfigured" };
+	}
+	for (const left of leftBehind) {
+		await scratchRemove(left);
 	}
 	const parent = join(repo.commonDir, "suonetar");
 	mkdirSync(parent, { recursive: true });
@@ -81,6 +86,24 @@ export async function mergetoolRun(
 		}
 		return { kind: "merged", content: merged.stdout };
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		await scratchRemove(dir);
+	}
+}
+
+// Throwaway directories that could not be removed yet, retried on this process's next run. Only this process's own: on Linux another Suonetar's directory would be removed even while its tool runs in it.
+const leftBehind = new Set<string>();
+
+// On Windows a cancelled tool, and the `git mergetool` still waiting on it, keep the directory as their cwd and its files open, and it cannot be removed while they run. Left behind and reported rather than failing the run.
+async function scratchRemove(dir: string): Promise<void> {
+	try {
+		await rm(dir, { recursive: true, force: true, maxRetries: 3 });
+		leftBehind.delete(dir);
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code !== "EPERM" && code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EACCES") {
+			throw err;
+		}
+		leftBehind.add(dir);
+		reportOnce(dir, `${dir} is still in use by the merge tool, so it is removed later`, err);
 	}
 }

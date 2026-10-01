@@ -117,12 +117,20 @@ describe("mergetool", () => {
 		}
 		session.cancel();
 		expect(await running).toEqual({ kind: "cancelled" });
-		expect(leftovers()).toEqual([]);
+		// On Windows the tool, still running in the throwaway directory, keeps it until a later run.
+		expect(leftovers().length).toBe(process.platform === "win32" ? 1 : 0);
 		expect(fx.git("status", "--porcelain")).toBe("?? started");
 		const tool = Number(readFileSync(pidFile, "utf8"));
 		await new Promise((r) => setTimeout(r, 300));
 		expect(() => process.kill(tool, 0)).not.toThrow();
 		process.kill(tool);
+
+		toolSet("true", false);
+		for (let i = 0; i < 50 && leftovers().length > 0; i++) {
+			await new Promise((r) => setTimeout(r, 100));
+			await session.mergetool(inputs, key, "a.txt", Buffer.from("current\n"));
+		}
+		expect(leftovers()).toEqual([]);
 	});
 
 	test("works for a file added on both sides, in a subdirectory, with no base version", async () => {
