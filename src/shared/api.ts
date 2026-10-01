@@ -58,7 +58,11 @@ export type SuonetarApi = {
 
 // Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.
 export type SuonetarShell = {
-	// The handler resolves to true when the window may close.
+	// The open repository's worktree, or undefined before one is opened.
+	readonly repository: () => Promise<string | undefined>;
+	// Asks for a repository to open, as File › Open Repository… does.
+	readonly open: () => void;
+	// The handler resolves to true once the page has saved everything, so the window may close or switch repositories.
 	readonly onCloseRequest: (handler: () => Promise<boolean>) => void;
 	// Progress of the apply this page started.
 	readonly onApplyProgress: (handler: (progress: ApplyProgress) => void) => void;

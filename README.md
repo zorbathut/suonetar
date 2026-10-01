@@ -25,7 +25,7 @@ npm install
 npm run app -- path/to/repo
 ```
 
-A relative path resolves against the directory npm was run from. A second argument sets the stack's base for that run, as in `npm run app -- path/to/repo origin/core`. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
+A relative path resolves against the directory npm was run from. Without one, Suonetar starts with no repository and File › Open Repository… (Ctrl+O) picks one; it also switches to another later. A second argument sets the stack's base for that run, as in `npm run app -- path/to/repo origin/core`. `npm run dev -- path/to/repo` runs it with the UI hot-reloading.
 
 ## Using it
 
@@ -45,7 +45,7 @@ git config suonetar.base origin/main
 
 **Undo** sits next to Apply. If nothing has moved the branch since the last apply, it puts back exactly the commits it had (same SHAs and signatures), and pressing it again redoes. If commits were made on top since, it prepares edits that restore the old commits for you to review and Apply. It is one level deep; [docs/recovery.md](docs/recovery.md) shows how to go further back by hand. (note: a human has not reviewed this yet)
 
-**Keys.** Alt+PageUp / Alt+PageDown move up and down the stack, uncommitted changes included, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads.
+**Keys.** Alt+PageUp / Alt+PageDown move up and down the stack, uncommitted changes included, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads; Ctrl+O opens another repository.
 
 ## Alongside an agent
 

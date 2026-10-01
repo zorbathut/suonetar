@@ -880,7 +880,13 @@ window.addEventListener(
 );
 
 // Anything unloading the page without going through the flush (a page-initiated close, a devtools reload) is cancelled while work is unsaved.
+// Set once the page has answered a close or a repository switch with yes: the window is about to close or reload, so it stops polling and saving, and lets the unload through.
+let released = false;
+
 window.addEventListener("beforeunload", (event) => {
+	if (released) {
+		return;
+	}
 	if (autosave.unsaved() || (view.kind === "resolve" && view.view.dirty())) {
 		event.preventDefault();
 		void op("Saving", async () => {
@@ -896,27 +902,34 @@ window.addEventListener("drop", (event) => event.preventDefault());
 
 window.suonetarShell.onCloseRequest(async () => {
 	if (busy) {
-		statusSet("An apply or a merge tool is running; close the window once it has finished, or cancel it.", "error");
+		statusSet("An apply or a merge tool is running; close the window or open another repository once it has finished, or cancel it.", "error");
 		return false;
 	}
 	let ok = false;
 	// Queued like any action, so an operation in progress finishes first.
 	await op("Closing", async () => {
 		if (view.kind === "resolve" && view.view.dirty()) {
-			const answer = await ask("Close with an unsaved resolution?", "Choices and edits not saved with “Save resolution” are lost.", [
-				{ label: "Close", value: "close" },
+			const answer = await ask("Leave the resolution unsaved?", "Choices and edits not saved with “Save resolution” are lost.", [
+				{ label: "Leave", value: "leave" },
 				{ label: "Stay", value: "stay", primary: true },
 			]);
-			if (answer !== "close") {
+			if (answer !== "leave") {
 				return;
 			}
 		}
 		ok = await flushOrAsk(true);
 	});
+	if (ok) {
+		released = true;
+		autosave.hold();
+	}
 	return ok;
 });
 
 async function poll(): Promise<void> {
+	if (released) {
+		return;
+	}
 	try {
 		if (!busy && !opRunning && document.querySelector(".modal-backdrop") === null) {
 			const generation = await call(api.generation());
@@ -949,4 +962,30 @@ async function poll(): Promise<void> {
 	window.setTimeout(() => void poll(), 1000);
 }
 
-void op("Starting", refresh).then(() => poll());
+// Started with no repository, the window offers to open one; File › Open Repository… then reloads the page onto it.
+function welcomeShow(): void {
+	filesEl.hidden = true;
+	applyEl.hidden = true;
+	docEl.replaceChildren(
+		el(
+			"div",
+			{ class: "blocked" },
+			el("h1", { text: "No repository open" }),
+			el("p", {
+				text: "Open one with File › Open Repository… (Ctrl+O), or start Suonetar with a repository and, if you like, the base for its stack: suonetar <repository> [<base>].",
+			}),
+			button("Open Repository…", () => window.suonetarShell.open(), "primary"),
+		),
+	);
+}
+
+void window.suonetarShell.repository().then(
+	(repository) => {
+		if (repository === undefined) {
+			welcomeShow();
+			return;
+		}
+		void op("Starting", refresh).then(() => poll());
+	},
+	(err: unknown) => report("Starting failed", err),
+);

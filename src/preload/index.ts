@@ -28,6 +28,8 @@ const api: SuonetarApi = {
 };
 
 const shell: SuonetarShell = {
+	repository: () => ipcRenderer.invoke("suonetar:repository"),
+	open: () => ipcRenderer.send("suonetar:open"),
 	onCloseRequest(handler) {
 		ipcRenderer.on("suonetar:close-request", () => {
 			handler().then(

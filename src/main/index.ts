@@ -1,8 +1,9 @@
-import { join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
 import { Session } from "../engine/session.ts";
 import { argumentsRead } from "./arguments.ts";
-import { ipcRegister } from "./ipc.ts";
+import { ErrorIpcArgument, ipcRegister } from "./ipc.ts";
+import { SessionSlot } from "./session-slot.ts";
 
 function log(message: string, err: unknown): void {
 	console.error(`suonetar: ${message}:`, err);
@@ -19,17 +20,30 @@ function iconLoad(): NativeImage {
 	return icon;
 }
 
+function titleFor(session: Session | undefined): string {
+	return session === undefined ? "Suonetar" : `Suonetar — ${session.repo.worktree}`;
+}
+
 type AppWindow = {
 	readonly win: BrowserWindow;
-	// Asks the page to save everything it holds; true once it has, or when no page is listening yet and so holds nothing.
+	// Asks the page to save everything it holds and then stand still; true once it has, or when no page is listening yet and so holds nothing.
 	readonly pageRelease: () => Promise<boolean>;
 };
 
-function windowCreate(repoPath: string): AppWindow {
+// How the window's closing and its page coordinate with the repository it shows.
+type WindowHooks = {
+	// A close was asked for; false when one is already waiting on the page.
+	readonly closeBegin: () => boolean;
+	readonly closeAbandoned: () => void;
+	// A newly loaded page is listening.
+	readonly pageLoaded: () => void;
+};
+
+function windowCreate(title: string, hooks: WindowHooks): AppWindow {
 	const win = new BrowserWindow({
 		width: 1600,
 		height: 1000,
-		title: `Suonetar — ${repoPath}`,
+		title,
 		backgroundColor: "#1e1e1e",
 		icon: iconLoad(),
 		webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -43,7 +57,7 @@ function windowCreate(repoPath: string): AppWindow {
 	contents.on("will-navigate", (event) => event.preventDefault());
 	contents.setWindowOpenHandler(() => ({ action: "deny" }));
 
-	// With the menu removed, the few window-level keys are handled here, before the page sees them.
+	// The few window-level keys the menu does not carry are handled here, before the page sees them.
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") {
 			return;
@@ -63,7 +77,7 @@ function windowCreate(repoPath: string): AppWindow {
 		}
 	});
 
-	// Closing asks the page to flush its saves; it answers true once everything is on disk (or the user chose to drop what could not be saved).
+	// Closing the window or opening another repository first asks the page to flush its saves; it answers true once everything is on disk (or the user chose to drop what could not be saved).
 	let rendererListening = false;
 	let asked: { readonly answer: Promise<boolean>; readonly reply: (ok: boolean) => void } | undefined;
 	let closing = false;
@@ -88,6 +102,7 @@ function windowCreate(repoPath: string): AppWindow {
 	ipcMain.on("suonetar:close-ready", (event) => {
 		if (event.sender === contents) {
 			rendererListening = true;
+			hooks.pageLoaded();
 		}
 	});
 	ipcMain.on("suonetar:close-reply", (event, ok: unknown) => {
@@ -115,9 +130,11 @@ function windowCreate(repoPath: string): AppWindow {
 			return;
 		}
 		event.preventDefault();
-		if (asked === undefined) {
+		if (hooks.closeBegin()) {
 			void pageRelease().then((ok) => {
-				if (ok && !win.isDestroyed()) {
+				if (!ok) {
+					hooks.closeAbandoned();
+				} else if (!win.isDestroyed()) {
 					closing = true;
 					win.destroy();
 				}
@@ -150,28 +167,83 @@ function windowCreate(repoPath: string): AppWindow {
 	return { win, pageRelease };
 }
 
+// The repository at `path`, or undefined once the user has been told why it cannot be opened.
+async function sessionOpen(path: string, base: string | undefined, parent: BrowserWindow | undefined): Promise<Session | undefined> {
+	try {
+		return await Session.open(path, base);
+	} catch (err) {
+		const message = `Cannot open ${path} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`;
+		if (parent === undefined) {
+			dialog.showErrorBox("Suonetar", message);
+		} else {
+			await dialog.showMessageBox(parent, { type: "error", title: "Suonetar", message });
+		}
+		return undefined;
+	}
+}
+
 async function main(): Promise<void> {
 	await app.whenReady();
-	Menu.setApplicationMenu(null);
+	app.setAboutPanelOptions({ applicationName: "Suonetar", applicationVersion: app.getVersion(), copyright: "Copyright © 2026 Ben Rog-Wilhelm" });
 	const args = argumentsRead(process.argv, app.isPackaged, process.env.INIT_CWD, process.cwd());
-	const repoPath = args.repo ?? resolve(process.env.INIT_CWD ?? process.cwd(), ".");
-	let session: Session;
-	try {
-		session = await Session.open(repoPath, args.base);
-	} catch (err) {
-		dialog.showErrorBox("Suonetar", `Cannot open ${repoPath} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`);
-		app.quit();
-		return;
-	}
-	const { win } = windowCreate(session.repo.worktree);
+	// Without a repository, or with one that cannot be opened, the window starts with none and File › Open Repository… picks one.
+	const initial = args.repo === undefined ? undefined : await sessionOpen(args.repo, args.base, undefined);
+	const slot: SessionSlot<Session> = new SessionSlot(initial, {
+		release: () => appWindow.pageRelease(),
+		show: (session) => {
+			appWindow.win.setTitle(titleFor(session));
+			appWindow.win.webContents.reload();
+		},
+	});
+	const appWindow = windowCreate(titleFor(initial), {
+		closeBegin: () => slot.closeBegin(),
+		closeAbandoned: () => slot.closeAbandoned(),
+		pageLoaded: () => slot.pageLoaded(),
+	});
+	const win = appWindow.win;
 	const ours = win.webContents;
-	ipcRegister(
-		ipcMain,
-		() => session,
-		(sender: WebContents) => sender === ours,
-		log,
+	const trusted = (sender: WebContents) => sender === ours;
+
+	const repoChoose = () => {
+		slot
+			.switchTo(async () => {
+				const from = slot.session?.repo.worktree;
+				const picked = await dialog.showOpenDialog(win, { title: "Open Repository", properties: ["openDirectory"], ...(from === undefined ? {} : { defaultPath: dirname(from) }) });
+				const path = picked.filePaths[0];
+				return picked.canceled || path === undefined ? undefined : await sessionOpen(path, undefined, win);
+			})
+			.catch((err: unknown) => log("opening a repository failed", err));
+	};
+
+	Menu.setApplicationMenu(
+		Menu.buildFromTemplate([
+			{
+				label: "&File",
+				submenu: [{ label: "&Open Repository…", accelerator: "CmdOrCtrl+O", click: repoChoose }, { type: "separator" }, { role: "quit" }],
+			},
+			{ label: "&Help", submenu: [{ label: "&About Suonetar", click: () => app.showAboutPanel() }] },
+		]),
 	);
+
+	ipcRegister(ipcMain, () => slot.current(), trusted, log);
+	ipcMain.handle("suonetar:repository", (event) => {
+		if (!trusted(event.sender)) {
+			throw new ErrorIpcArgument("call from an unknown page");
+		}
+		return slot.session?.repo.worktree;
+	});
+	ipcMain.on("suonetar:open", (event) => {
+		if (trusted(event.sender)) {
+			repoChoose();
+		}
+	});
+
 	app.on("window-all-closed", () => {
+		const session = slot.session;
+		if (session === undefined) {
+			app.quit();
+			return;
+		}
 		// The window can only close mid-apply when forced; a hook still running would otherwise hold the session open.
 		session.cancel();
 		session.closeWhenIdle().then(
