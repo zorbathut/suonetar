@@ -5,6 +5,7 @@ import {
 	copyFileSync,
 	existsSync,
 	fstatSync,
+	futimesSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
@@ -221,9 +222,10 @@ class LockHeld {
 		return stat !== undefined && stat.ino === this.ino && stat.dev === this.dev;
 	}
 
-	// Installs `content` as the new index through git's lockfile protocol: write the lock, rename it over the index.
-	install(content: Buffer, indexPath: string): void {
+	// Installs `content` as the new index through git's lockfile protocol: write the lock, rename it over the index. It is stamped `seconds`, when the index was made, not now: an index newer than the files it records would let a same-size edit made in their second pass as clean.
+	install(content: Buffer, indexPath: string, seconds: number): void {
 		writeFileSync(this.fd, content);
+		futimesSync(this.fd, seconds, seconds);
 		renameSync(this.path, indexPath);
 		this.close();
 	}
@@ -357,7 +359,7 @@ async function publishLocked(repo: Repo, branch: string, oldTip: Oid, newTip: Oi
 		if (!lock.stillOurs()) {
 			return interrupted("index.lock was removed by another process before the new index could be installed");
 		}
-		lock.install(readFileSync(privateIndex), join(repo.gitDir, "index"));
+		lock.install(readFileSync(privateIndex), join(repo.gitDir, "index"), Math.floor(statSync(privateIndex).mtimeMs / 1000));
 		rmSync(privateIndex);
 		rmSync(intentFile);
 		return { kind: "published" };

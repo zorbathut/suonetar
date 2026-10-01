@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { draftWithFile } from "./drafts.ts";
@@ -79,6 +79,19 @@ describe("apply", () => {
 		expect(fx.git("diff-files", "--name-only")).toBe("a.txt");
 		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(disk("a.txt")).toBe(theirs);
+	});
+
+	test("installs the new index stamped no later than the files the update wrote, however long publishing took", async () => {
+		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		let stamped = 0;
+		// Between the worktree update and installing the index, a second boundary passes.
+		const s = await sessionWith(beforeRefTransaction, async () => {
+			stamped = Math.floor(statSync(join(fx.dir, ".git", "suonetar", "index.private")).mtimeMs / 1000);
+			await new Promise((r) => setTimeout(r, 1100));
+		});
+		expect((await s.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("published");
+		// An index stamped later than the files would hide an edit made in their second.
+		expect(Math.floor(statSync(join(fx.dir, ".git", "index")).mtimeMs / 1000)).toBe(stamped);
 	});
 
 	test("keeps unrelated uncommitted and staged changes, and ignores touched-but-unchanged files", async () => {
