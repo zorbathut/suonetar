@@ -23,7 +23,7 @@ export function textDecode(bytes: Uint8Array): Decoded {
 		raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
 	} catch (err) {
 		if (err instanceof TypeError) {
-			return { kind: "readonly", text: lenient(bytes), reason: "not valid UTF-8" };
+			return { kind: "readonly", text: lenient(bytes), reason: "is not valid UTF-8" };
 		}
 		throw err;
 	}
