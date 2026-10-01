@@ -295,4 +295,17 @@ describe("session drafts", () => {
 		expect((await file(c3, "link")).refusal).toContain("symbolic link");
 		await expect(session.draftSetFile(c3, "link/x", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
 	});
+
+	test("each file carries its EditorConfig indentation, as of the version shown", async () => {
+		const c3 = fx.commit("c3", { ".editorconfig": "[*]\nindent_size = 4\n", "sub/.editorconfig": "[*]\nindent_size = 3\n", "sub/x.cs": "x\n", "y.cs": "y\n" });
+		const c4 = fx.commit("c4", { "sub/.editorconfig": null, "sub/x.cs": null, "y.cs": "y2\n" });
+		const sizes = (doc: Awaited<ReturnType<typeof session.commitDocument>>) => Object.fromEntries(doc.files.map((f) => [f.path, f.indentation.size]));
+		expect(sizes(await session.commitDocument(c3))).toEqual({ ".editorconfig": 4, "sub/.editorconfig": 3, "sub/x.cs": 3, "y.cs": 4 });
+		// A deleted file keeps the indentation it had, though its directory's config went with it.
+		expect(sizes(await session.commitDocument(c4))).toMatchObject({ "sub/x.cs": 3, "y.cs": 4 });
+		// A draft that edits the config takes effect, in the commit's document and the draft's own.
+		await session.draftSetFile(c4, ".editorconfig", Buffer.from("[*]\nindent_size = 2\n"));
+		expect(sizes(await session.commitDocument(c4))).toMatchObject({ "y.cs": 2 });
+		expect(sizes(await session.draftDocument(c4))).toMatchObject({ ".editorconfig": 2 });
+	});
 });

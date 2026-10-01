@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { intentCheck, type PublishResult, preflightPosition, publish } from "./apply.ts";
 import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
+import { type Indentation, indentationFor } from "./editorconfig.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
-import { gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
+import { fileReaderDisk, gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
 import { type HookCache, type HookCommit, type HookFailure, type HookPassResult, type HookProgress, hookIdentity, hooksPass } from "./hooks.ts";
 import { type Conflict, mergeTrees } from "./merge.ts";
 import { type MergetoolResult, mergetoolName, mergetoolRun } from "./mergetool.ts";
@@ -84,6 +85,8 @@ export type DocumentFile = {
 	readonly commit: Buffer | undefined;
 	readonly draft: Buffer | undefined;
 	readonly tooLarge: boolean;
+	// From EditorConfig, as of the version shown (the parent's, for a file that version deletes).
+	readonly indentation: Indentation;
 };
 
 export type CommitDocument = {
@@ -150,7 +153,7 @@ export class Session {
 	}
 
 	static async open(path: string): Promise<Session> {
-		return Session.openRepo(await repoOpen(gitRunnerSpawn(), hookRunnerSpawn(), path));
+		return Session.openRepo(await repoOpen(gitRunnerSpawn(), hookRunnerSpawn(), fileReaderDisk(), path));
 	}
 
 	static async openRepo(repo: Repo): Promise<Session> {
@@ -656,6 +659,16 @@ export class Session {
 		const byDraft = draftTree === commitTree ? byCommit : await treeDiff(this.repo, parentTree, draftTree);
 		const paths = [...new Set([...byCommit, ...byDraft].map((c) => c.path))].sort();
 		const refusals = await editability(this.repo, draftTree, paths);
+		const shown = await indentationFor(this.repo, this.#cat, draftTree, paths);
+		const deleted = byDraft.filter((c) => c.status === "D").map((c) => c.path);
+		const before = deleted.length === 0 ? new Map<string, Indentation>() : await indentationFor(this.repo, this.#cat, parentTree, deleted);
+		const indentationOf = (path: string): Indentation => {
+			const found = before.get(path) ?? shown.get(path);
+			if (found === undefined) {
+				throw new Error(`no indentation resolved for ${path}`);
+			}
+			return found;
+		};
 		const files: DocumentFile[] = [];
 		for (const path of paths) {
 			const inDraft = byDraft.find((c) => c.path === path);
@@ -671,6 +684,7 @@ export class Session {
 				commit: tooLarge ? undefined : commit,
 				draft: tooLarge ? undefined : draft,
 				tooLarge,
+				indentation: indentationOf(path),
 			});
 		}
 		return files;

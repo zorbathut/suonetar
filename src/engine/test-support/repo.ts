@@ -7,6 +7,8 @@ import { type GitRunner, gitRunnerSpawn, hookRunnerSpawn, type Repo, repoOpen } 
 export type Fixture = {
 	readonly dir: string;
 	readonly repo: Repo;
+	// Files the engine reads from outside the repository, by absolute path; empty unless a test fills it, so nothing on the test machine leaks in.
+	readonly outside: Map<string, string | Buffer>;
 	// Synchronous git in the fixture, as a user or Claude Code would run it. Throws on failure.
 	git(...args: string[]): string;
 	// Like git(), but returns the exit code and output instead of throwing.
@@ -40,8 +42,14 @@ function envUser(home: string): Record<string, string> {
 	};
 }
 
+function outsideRead(outside: ReadonlyMap<string, string | Buffer>, path: string): Buffer | undefined {
+	const contents = outside.get(path);
+	return typeof contents === "string" ? Buffer.from(contents) : contents;
+}
+
 export async function repoFixture(): Promise<Fixture> {
 	const dir = mkdtempSync(join(tmpdir(), "suonetar-test-"));
+	const outside = new Map<string, string | Buffer>();
 	const gitSync = (args: string[]) => execFileSync("git", args, { cwd: dir, env: envUser(dir), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).replace(/\n$/, "");
 	gitSync(["init", "-q", "-b", "main"]);
 	gitSync(["config", "user.name", "Committer"]);
@@ -49,7 +57,8 @@ export async function repoFixture(): Promise<Fixture> {
 	const fixture: Fixture = {
 		dir,
 		// The engine's runner sees the same isolated config as the fixture's own git calls.
-		repo: await repoOpen(runnerIsolated(dir), hookRunnerSpawn(), dir, envIsolated(dir)),
+		repo: await repoOpen(runnerIsolated(dir), hookRunnerSpawn(), async (path) => outsideRead(outside, path), dir, envIsolated(dir)),
+		outside,
 		git: (...args) => gitSync(args),
 		gitTry: (...args) => {
 			try {

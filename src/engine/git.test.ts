@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { hookRunnerSpawn } from "./git.ts";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { fileReaderDisk, hookRunnerSpawn } from "./git.ts";
 
 function alive(pid: number): boolean {
 	try {
@@ -139,5 +139,25 @@ describe("hook runner", () => {
 		await new Promise((r) => setTimeout(r, 300));
 		expect(alive(tool)).toBe(true);
 		process.kill(tool);
+	});
+});
+
+describe("fileReaderDisk", () => {
+	test("reads a file, and gives undefined for one missing or unreadable, reporting the latter once", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "suonetar-read-"));
+		const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			writeFileSync(join(dir, "file"), "contents");
+			mkdirSync(join(dir, "directory"));
+			const read = fileReaderDisk();
+			expect((await read(join(dir, "file")))?.toString()).toBe("contents");
+			expect(await read(join(dir, "missing"))).toBeUndefined();
+			expect(await read(join(dir, "directory"))).toBeUndefined();
+			expect(await read(join(dir, "directory"))).toBeUndefined();
+			expect(reported).toHaveBeenCalledTimes(1);
+		} finally {
+			reported.mockRestore();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

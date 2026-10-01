@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { delimiter } from "node:path";
 import { ErrorGit } from "./errors.ts";
+import { reportOnce } from "./report.ts";
 
 export type Oid = string;
 
@@ -23,9 +25,13 @@ export type HookRunner = (
 	opts: { readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly signal: AbortSignal; readonly group: "kill" | "leave" },
 ) => Promise<HookResult>;
 
+// Reads a file outside the repository (an `.editorconfig` above the worktree); undefined when there is none to read.
+export type FileReader = (path: string) => Promise<Buffer | undefined>;
+
 export type Repo = {
 	readonly run: GitRunner;
 	readonly runHook: HookRunner;
+	readonly readOutside: FileReader;
 	readonly worktree: string;
 	readonly gitDir: string;
 	readonly commonDir: string;
@@ -220,7 +226,22 @@ export async function gitText(repo: Repo, args: readonly string[], opts: { input
 	return (await gitOk(repo, args, opts)).toString("utf8").replace(/\n$/, "");
 }
 
-export async function repoOpen(run: GitRunner, runHook: HookRunner, path: string, envExtra: Readonly<Record<string, string>> = {}): Promise<Repo> {
+// A file that is absent reads as undefined. One that cannot be read (a directory, no permission) is reported and also reads as undefined: a stray file above the repository must not break every document.
+export function fileReaderDisk(): FileReader {
+	return async (path) => {
+		try {
+			return await readFile(path);
+		} catch (err) {
+			const code = err instanceof Error && "code" in err ? String(err.code) : "";
+			if (code !== "ENOENT") {
+				reportOnce(`${path}\0${code}`, `reading ${path} failed, so it is ignored`, err);
+			}
+			return undefined;
+		}
+	};
+}
+
+export async function repoOpen(run: GitRunner, runHook: HookRunner, readOutside: FileReader, path: string, envExtra: Readonly<Record<string, string>> = {}): Promise<Repo> {
 	const probe = await run(["rev-parse", "--show-toplevel", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir"], { cwd: path });
 	if (probe.code !== 0) {
 		throw new ErrorGit(["rev-parse"], probe.code, probe.stderr);
@@ -229,7 +250,7 @@ export async function repoOpen(run: GitRunner, runHook: HookRunner, path: string
 	if (worktree === undefined || gitDir === undefined || commonDir === undefined) {
 		throw new Error(`unexpected rev-parse output: ${probe.stdout.toString("utf8")}`);
 	}
-	return { run, runHook, worktree, gitDir, commonDir, envExtra };
+	return { run, runHook, readOutside, worktree, gitDir, commonDir, envExtra };
 }
 
 // Splits NUL-terminated output, dropping the empty string after the final terminator.
