@@ -44,7 +44,20 @@ export async function mergetoolRun(
 		writeFileSync(file, input.content);
 
 		// Temporary files outside the work tree and no backup, so a cancelled tool leaves nothing next to the file; no hooks for the `git add` it runs.
-		const args = ["-c", "mergetool.writeToTemp=true", "-c", "mergetool.keepBackup=false", "-c", "core.hooksPath=/dev/null", "mergetool", "--no-prompt", "--", input.path];
+		const args = [
+			"-c",
+			"mergetool.writeToTemp=true",
+			"-c",
+			"mergetool.keepBackup=false",
+			"-c",
+			"core.hooksPath=/dev/null",
+			"-c",
+			"core.longpaths=true",
+			"mergetool",
+			"--no-prompt",
+			"--",
+			input.path,
+		];
 		const ran = await repo.runHook(args, {
 			cwd: worktree,
 			env: { ...repo.envExtra, GIT_DIR: repo.gitDir, GIT_WORK_TREE: worktree, GIT_INDEX_FILE: index, GIT_ATTR_SOURCE: input.attrSource },

@@ -4,8 +4,8 @@ import { pidAlive, renameRetrying } from "./apply.ts";
 import { ErrorGit } from "./errors.ts";
 import type { GitResult, HookResult, Oid, Repo } from "./git.ts";
 
-// Plumbing in the private worktree must not fire the user's hooks (`post-index-change`, `reference-transaction`), start an fsmonitor daemon for it, or give its HEAD a reflog that would pin every stand-in commit. Config-based hooks are disabled by name on top of this (`quietArgs`).
-const QUIET = ["-c", "core.hooksPath=/dev/null", "-c", "core.logAllRefUpdates=false", "-c", "core.fsmonitor=false"];
+// Plumbing in the private worktree must not fire the user's hooks (`post-index-change`, `reference-transaction`), start an fsmonitor daemon for it, or give its HEAD a reflog that would pin every stand-in commit. Config-based hooks are disabled by name on top of this (`quietArgs`). It sits deeper than the user's checkout, so on Windows it needs long paths where theirs may not.
+const QUIET = ["-c", "core.hooksPath=/dev/null", "-c", "core.logAllRefUpdates=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true"];
 
 // A lock file that cannot be parsed is treated as held until it is this old.
 const LOCK_UNREADABLE_MS = 60_000;
