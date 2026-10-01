@@ -218,13 +218,13 @@ async function adminOf(repo: Repo, path: string): Promise<string | undefined> {
 	if (!existsSync(join(repo.commonDir, "worktrees"))) {
 		return undefined;
 	}
-	const worktrees = realpathSync(join(repo.commonDir, "worktrees")) + sep;
+	const worktrees = realpathSync.native(join(repo.commonDir, "worktrees")) + sep;
 	const gitdirFile = join(admin, "gitdir");
-	if (!realpathSync(admin).startsWith(worktrees) || !existsSync(gitdirFile)) {
+	if (!realpathSync.native(admin).startsWith(worktrees) || !existsSync(gitdirFile)) {
 		return undefined;
 	}
 	const pointsAt = readFileSync(gitdirFile, "utf8").trim();
-	return existsSync(pointsAt) && realpathSync(pointsAt) === realpathSync(join(path, ".git")) ? admin : undefined;
+	return existsSync(pointsAt) && realpathSync.native(pointsAt) === realpathSync.native(join(path, ".git")) ? admin : undefined;
 }
 
 async function create(repo: Repo, path: string, head: Oid, quiet: readonly string[]): Promise<string> {

@@ -154,12 +154,12 @@ export async function preflightPosition(repo: Repo, branch: string, oldTip: Oid)
 	if (present >= 0) {
 		return { kind: "refused", reason: `a git operation is in progress (${IN_PROGRESS[present]} exists); finish or abort it first` };
 	}
-	const here = realpathSync(repo.worktree);
+	const here = realpathSync.native(repo.worktree);
 	let worktreePath = "";
 	for (const line of splitNul(await gitOk(repo, ["worktree", "list", "--porcelain", "-z"]))) {
 		if (line.startsWith("worktree ")) {
 			worktreePath = line.slice("worktree ".length);
-		} else if (line === `branch ${branch}` && existsSync(worktreePath) && realpathSync(worktreePath) !== here) {
+		} else if (line === `branch ${branch}` && existsSync(worktreePath) && realpathSync.native(worktreePath) !== here) {
 			return { kind: "refused", reason: `${branch} is also checked out in ${worktreePath}` };
 		}
 	}
