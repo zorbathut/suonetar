@@ -19,7 +19,7 @@ const api: SuonetarApi = {
 	preview: () => ipcRenderer.invoke(apiChannel("preview")),
 	apply: (hooks) => ipcRenderer.invoke(apiChannel("apply"), hooks),
 	undo: (old, newTip, kind) => ipcRenderer.invoke(apiChannel("undo"), old, newTip, kind),
-	applyCancel: () => ipcRenderer.invoke(apiChannel("applyCancel")),
+	cancel: () => ipcRenderer.invoke(apiChannel("cancel")),
 };
 
 const shell: SuonetarShell = {

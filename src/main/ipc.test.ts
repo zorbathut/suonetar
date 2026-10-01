@@ -28,7 +28,7 @@ const NAMES: Record<keyof SuonetarApi, true> = {
 	preview: true,
 	apply: true,
 	undo: true,
-	applyCancel: true,
+	cancel: true,
 };
 
 function harness() {

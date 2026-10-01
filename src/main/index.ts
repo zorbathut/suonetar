@@ -130,7 +130,7 @@ async function main(): Promise<void> {
 	ipcRegister(ipcMain, session, (sender: WebContents) => sender === ours, log);
 	app.on("window-all-closed", () => {
 		// The window can only close mid-apply when forced; a hook still running would otherwise hold the session open.
-		session.applyCancel();
+		session.cancel();
 		session.closeWhenIdle().then(
 			() => app.quit(),
 			(err: unknown) => {

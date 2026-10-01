@@ -28,8 +28,8 @@ export type SuonetarApi = {
 	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
 	// Undoes the branch's last Suonetar move, as `SessionState`'s `undo` described it.
 	readonly undo: (old: string, newTip: string, kind: "exact" | "edits") => Promise<Result<Wire<UndoResult>>>;
-	// Stops the pre-commit pass of a running apply, which then returns `cancelled`.
-	readonly applyCancel: () => Promise<Result<undefined>>;
+	// Stops the long operation in progress (the pre-commit pass of an apply), which then returns `cancelled`.
+	readonly cancel: () => Promise<Result<undefined>>;
 };
 
 // Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.

@@ -109,7 +109,7 @@ export type SessionApi = Pick<
 	| "preview"
 	| "apply"
 	| "undo"
-	| "applyCancel"
+	| "cancel"
 >;
 
 // One handler per `SuonetarApi` method, each a single call into the session; calls from any page but ours are refused.
@@ -174,8 +174,8 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 		}
 		return session.undo(argOid(a, 0), argOid(a, 1), kind);
 	});
-	handle("applyCancel", async () => {
-		session.applyCancel();
+	handle("cancel", async () => {
+		session.cancel();
 		return undefined;
 	});
 }

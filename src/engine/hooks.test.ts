@@ -184,7 +184,7 @@ exit $changed`);
 			await new Promise((r) => setTimeout(r, 25));
 		}
 		const cancelledAt = Date.now();
-		session.applyCancel();
+		session.cancel();
 		expect((await running).kind).toBe("cancelled");
 		expect(Date.now() - cancelledAt).toBeLessThan(5000);
 		hookInstall("exit 0");
@@ -253,7 +253,7 @@ exit $changed`);
 		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
 		const tip = fx.git("rev-parse", "HEAD");
 		const running = apply();
-		session.applyCancel();
+		session.cancel();
 		expect((await running).kind).toBe("cancelled");
 		expect(fx.git("rev-parse", "HEAD")).toBe(tip);
 		expect(logLines()).toEqual([]);

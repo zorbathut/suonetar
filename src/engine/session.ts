@@ -136,7 +136,7 @@ export class Session {
 	readonly #cat: CatFile;
 	readonly #mutex: Mutex;
 	readonly #hookCache: HookCache = new Map();
-	#applyAbort: AbortController | undefined;
+	#abort: AbortController | undefined;
 
 	private constructor(repo: Repo, cat: CatFile) {
 		this.repo = repo;
@@ -376,19 +376,19 @@ export class Session {
 	async apply(hooks: HookChoice, progress: (p: ApplyProgress) => void): Promise<ApplyResult> {
 		// Created before queueing, so a cancel pressed while the apply waits or prepares is not lost.
 		const abort = new AbortController();
-		this.#applyAbort = abort;
+		this.#abort = abort;
 		try {
 			return await this.#mutex.run(() => this.#apply(hooks, progress, abort.signal));
 		} finally {
-			if (this.#applyAbort === abort) {
-				this.#applyAbort = undefined;
+			if (this.#abort === abort) {
+				this.#abort = undefined;
 			}
 		}
 	}
 
-	// Stops the apply in progress if it has not started publishing; publishing itself is never interrupted. Not serialised, since the apply holds the mutex.
-	applyCancel(): void {
-		this.#applyAbort?.abort();
+	// Stops the long operation in progress: an apply that has not started publishing (publishing itself is never interrupted). Not serialised, since the operation holds the mutex.
+	cancel(): void {
+		this.#abort?.abort();
 	}
 
 	// Undoes the branch's last Suonetar move, which must still be the one from `old` to `newTip`, the user confirmed as `kind`.

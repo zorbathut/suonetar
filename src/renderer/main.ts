@@ -718,7 +718,7 @@ undoEl.addEventListener("click", () => void op("Undo", undoRun));
 // Outside the operation queue, which the running apply holds.
 cancelEl.addEventListener("click", () => {
 	statusSet("Cancelling…", "info");
-	call(api.applyCancel()).catch((err: unknown) => report("Cancelling failed", err));
+	call(api.cancel()).catch((err: unknown) => report("Cancelling failed", err));
 });
 window.suonetarShell.onApplyProgress((progress) => {
 	if (busy) {
