@@ -6,4 +6,3 @@
 - Formatting in the editor: an external command run on the file in the private worktree at that commit, which covers stdin and in-place formatters alike. Waiting on a formatter being chosen for the target repository, whose hook lints but does not format.
 - A list-then-fetch `commitDocument`, if commits grow big enough to need it; the target repository's largest recent commit is 59 files and under 800 KiB.
 - A desktop launcher: a `.desktop` file installed under `~/.local/share/applications`, carrying the icon in `resources/`. It must be named for the window's app ID (`suonetar.desktop`, package.json's `desktopName`) or carry a matching `StartupWMClass`, or the desktop treats the launcher and the running window as different apps. The window shows the icon without one.
-- GitHub Actions that build and publish a release for Windows and Linux when a tag is pushed.
