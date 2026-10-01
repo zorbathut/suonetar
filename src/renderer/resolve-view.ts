@@ -1,7 +1,7 @@
 import { type EditorState, type Range, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import type { ConflictStage } from "../engine/merge.ts";
-import type { ConflictReport, ResolutionChoice } from "../engine/session.ts";
+import type { ConflictReport, MergetoolOutcome, ResolutionChoice } from "../engine/session.ts";
 import type { Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { type TextCodec, textDecode, textEncode, textShow } from "./codec.ts";
@@ -17,6 +17,8 @@ export type ResolveViewHost = {
 	readonly op: (what: string, fn: () => Promise<void>) => Promise<void>;
 	// Called after a resolution was stored; the host previews again and updates or replaces this view.
 	readonly onResolved: () => Promise<void>;
+	// Marks the app busy (cancellable) while an external merge tool is open, and not busy once it is closed; `message` goes to the status line either way.
+	readonly busy: (on: boolean, message: string) => void;
 };
 
 type Row = {
@@ -139,10 +141,13 @@ export class ResolveView {
 	#report: Report;
 	readonly #labels: ReadonlyMap<string, string>;
 	readonly #rows: Row[] = [];
+	// The configured merge tool, offered for content conflicts.
+	readonly #tool: string | undefined;
 
-	private constructor(host: ResolveViewHost, report: Report) {
+	private constructor(host: ResolveViewHost, report: Report, tool: string | undefined) {
 		this.#host = host;
 		this.#report = report;
+		this.#tool = tool;
 		this.#labels = new Map([
 			[report.inputs.ours, "below"],
 			[report.inputs.theirs, "this commit"],
@@ -161,7 +166,7 @@ export class ResolveView {
 	}
 
 	static async create(host: ResolveViewHost, report: Report): Promise<ResolveView> {
-		const view = new ResolveView(host, report);
+		const view = new ResolveView(host, report, await call(api.mergetoolName()));
 		await view.#render();
 		return view;
 	}
@@ -286,13 +291,24 @@ export class ResolveView {
 			const initial = conflictRelabelMarkers(decoded.text, this.#labels);
 			const holder = el("div", { class: "section-body" });
 			const counter = el("span", { class: "record-count" });
-			root.append(el("div", { class: "section-header" }, el("span", { class: "path", text: path }), counter), holder);
+			const header = el("div", { class: "section-header" }, el("span", { class: "path", text: path }), counter);
+			root.append(header, holder);
 			const update = () => {
 				const left = conflictBlocks(view.state.doc.toString()).length;
 				counter.textContent = left === 0 ? "no conflict blocks left" : `${left} conflict block${left === 1 ? "" : "s"} left`;
 			};
 			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField] });
 			update();
+			const tool = this.#tool;
+			if (tool !== undefined) {
+				header.append(
+					el(
+						"span",
+						{ class: "actions" },
+						button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)),
+					),
+				);
+			}
 			editors.push({ path, view, codec: decoded.codec, initial });
 		}
 		root.append(
@@ -333,6 +349,60 @@ export class ResolveView {
 				}
 			},
 		};
+	}
+
+	// Hands the path to the merge tool, starting from the editor's text, and puts the tool's result into the editor for review; Save resolution still stores it.
+	#mergetoolOpen(tool: string, record: Record, path: string, view: EditorView, codec: TextCodec, status: HTMLElement): void {
+		void this.#host.op(`Opening ${tool}`, async () => {
+			status.textContent = "";
+			this.#host.busy(true, `Waiting for ${tool} to close… Cancel stops waiting; close the tool's own window yourself.`);
+			let result: Wire<MergetoolOutcome>;
+			try {
+				result = await call(api.mergetool(this.#report.inputs, record.key, path, textEncode(view.state.doc.toString(), codec)));
+			} finally {
+				this.#host.busy(false, `${tool} closed; see the conflict for what it did.`);
+			}
+			switch (result.kind) {
+				case "merged": {
+					const decoded = textDecode(result.content);
+					if (decoded.kind !== "text") {
+						// Loading it into the editor would change its bytes, and dropping it would lose the merge: it can be stored exactly as the tool wrote it.
+						const why = decoded.kind === "binary" ? "is not text" : decoded.reason;
+						if (record.paths.length !== 1) {
+							status.textContent = `${tool}'s result for ${path} ${why}, so it cannot be shown here; resolve it in the editor instead.`;
+							return;
+						}
+						const content = result.content;
+						status.replaceChildren(
+							`${tool}'s result for ${path} ${why}, so it cannot be shown here. `,
+							button("Save the tool's result as is", () => this.#save(record, [{ path, content, markersAllowed: true }], [], status)),
+						);
+						return;
+					}
+					view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: decoded.text }, userEvent: "input.mergetool" });
+					status.textContent = `${path} merged in ${tool}. Check it, then Save resolution.`;
+					return;
+				}
+				case "unresolved": {
+					const tail = result.output.trim().split("\n").slice(-3).join(" ");
+					status.textContent = `${tool} did not resolve ${path}${tail === "" ? "." : `: ${tail}`}`;
+					return;
+				}
+				case "cancelled":
+					status.textContent = `Stopped waiting for ${tool}; anything it saves now is ignored.`;
+					return;
+				case "unconfigured":
+					status.textContent = "No merge tool is configured (git config merge.tool).";
+					return;
+				case "stale":
+					status.textContent = "That conflict no longer occurs; apply again to see the current state.";
+					return;
+				default: {
+					const never: never = result;
+					throw new Error(`unknown merge tool result ${String(never)}`);
+				}
+			}
+		});
 	}
 
 	#stagePreview(stage: Wire<ConflictStage>): HTMLElement {

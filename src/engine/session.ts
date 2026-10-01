@@ -5,6 +5,7 @@ import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStore
 import { gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
 import { type HookCache, type HookCommit, type HookFailure, type HookPassResult, type HookProgress, hookIdentity, hooksPass } from "./hooks.ts";
 import { type Conflict, mergeTrees } from "./merge.ts";
+import { type MergetoolResult, mergetoolName, mergetoolRun } from "./mergetool.ts";
 import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff } from "./objects.ts";
 import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
@@ -68,6 +69,8 @@ export type UndoResult =
 	| { readonly kind: "unavailable"; readonly reason: string }
 	// The branch's last Suonetar move is no longer the one the user confirmed undoing.
 	| { readonly kind: "stale" };
+
+export type MergetoolOutcome = MergetoolResult | { readonly kind: "stale" };
 
 export type DocumentFile = {
 	readonly path: string;
@@ -137,6 +140,8 @@ export class Session {
 	readonly #mutex: Mutex;
 	readonly #hookCache: HookCache = new Map();
 	#abort: AbortController | undefined;
+	// The merge tool being waited for, which holds a throwaway directory until it returns.
+	#tool: Promise<MergetoolOutcome> | undefined;
 
 	private constructor(repo: Repo, cat: CatFile) {
 		this.repo = repo;
@@ -160,9 +165,16 @@ export class Session {
 		this.#cat.close();
 	}
 
-	// Closes once the operation in progress (and any queued behind it) has finished.
+	// Closes once the operation in progress (and any queued behind it) has finished, including a merge tool, which runs outside the queue.
 	closeWhenIdle(): Promise<void> {
-		return this.#mutex.run(async () => this.close());
+		const tool = this.#tool;
+		return this.#mutex.run(async () => {
+			try {
+				await tool;
+			} finally {
+				this.close();
+			}
+		});
 	}
 
 	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, the configured base changes, or any branch moves (a push or fetch changes the base and what is pushed).
@@ -386,7 +398,47 @@ export class Session {
 		}
 	}
 
-	// Stops the long operation in progress: an apply that has not started publishing (publishing itself is never interrupted). Not serialised, since the operation holds the mutex.
+	mergetoolName(): Promise<string | undefined> {
+		return this.#mutex.run(() => mergetoolName(this.repo));
+	}
+
+	// Opens one path of a content conflict in the user's merge tool, starting from `content` (the resolve view's current text). `stale` when the conflict no longer occurs. The tool may stay open for minutes, so it runs outside the mutex: it touches nothing but its own throwaway index and work tree, and object writes.
+	async mergetool(inputs: MergeInputs, key: string, path: string, content: Buffer): Promise<MergetoolOutcome> {
+		const running = this.#mergetool(inputs, key, path, content);
+		this.#tool = running;
+		try {
+			return await running;
+		} finally {
+			if (this.#tool === running) {
+				this.#tool = undefined;
+			}
+		}
+	}
+
+	async #mergetool(inputs: MergeInputs, key: string, path: string, content: Buffer): Promise<MergetoolOutcome> {
+		const abort = new AbortController();
+		this.#abort = abort;
+		try {
+			const conflict = await this.#mutex.run(async () => {
+				const merged = await mergeTrees(this.repo, inputs.base, inputs.ours, inputs.theirs);
+				return merged.kind === "conflict" ? merged.conflicts.find((c) => c.key === key) : undefined;
+			});
+			if (conflict === undefined) {
+				return { kind: "stale" };
+			}
+			const stages = conflict.stages[path];
+			if (conflict.kind !== "content" || stages === undefined || stages.some((s) => s.mode !== "100644" && s.mode !== "100755")) {
+				throw new Error(`${path} is not a text path of conflict ${key}`);
+			}
+			return await mergetoolRun(this.repo, { path, stages, attrSource: inputs.theirs, content }, abort.signal);
+		} finally {
+			if (this.#abort === abort) {
+				this.#abort = undefined;
+			}
+		}
+	}
+
+	// Stops the long operation in progress: an apply that has not started publishing (publishing itself is never interrupted), or a merge tool being waited for. Not serialised: an apply holds the mutex while it runs. Only one of the two runs at a time, since the window is busy during either.
 	cancel(): void {
 		this.#abort?.abort();
 	}

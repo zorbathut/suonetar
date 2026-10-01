@@ -28,6 +28,8 @@ const NAMES: Record<keyof SuonetarApi, true> = {
 	preview: true,
 	apply: true,
 	undo: true,
+	mergetoolName: true,
+	mergetool: true,
 	cancel: true,
 };
 
@@ -99,6 +101,7 @@ describe("ipcRegister", () => {
 		["a non-oid commit to skip", "apply", [{ kind: "run", skip: ["HEAD"] }]],
 		["an unknown undo kind", "undo", [OID, OID, "sideways"]],
 		["a non-oid undo target", "undo", ["HEAD", OID, "exact"]],
+		["text instead of bytes for the merge tool", "mergetool", [{ base: OID, ours: OID, theirs: OID }, "key", "a.txt", "text"]],
 	] as const)("rejects %s without calling the session", async (_what, name, args) => {
 		const { invoke, calls } = harness();
 		const result = await invoke(name, ...args);

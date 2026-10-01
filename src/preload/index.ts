@@ -19,6 +19,8 @@ const api: SuonetarApi = {
 	preview: () => ipcRenderer.invoke(apiChannel("preview")),
 	apply: (hooks) => ipcRenderer.invoke(apiChannel("apply"), hooks),
 	undo: (old, newTip, kind) => ipcRenderer.invoke(apiChannel("undo"), old, newTip, kind),
+	mergetoolName: () => ipcRenderer.invoke(apiChannel("mergetoolName")),
+	mergetool: (inputs, key, path, content) => ipcRenderer.invoke(apiChannel("mergetool"), inputs, key, path, content),
 	cancel: () => ipcRenderer.invoke(apiChannel("cancel")),
 };
 

@@ -1,5 +1,16 @@
 import type { MergeInputs } from "../engine/replay.ts";
-import type { ApplyProgress, ApplyResult, CommitDocument, HookChoice, PreviewResult, ResolutionChoice, ResolveResult, SessionState, UndoResult } from "../engine/session.ts";
+import type {
+	ApplyProgress,
+	ApplyResult,
+	CommitDocument,
+	HookChoice,
+	MergetoolOutcome,
+	PreviewResult,
+	ResolutionChoice,
+	ResolveResult,
+	SessionState,
+	UndoResult,
+} from "../engine/session.ts";
 
 // An engine type as it arrives on the other side of IPC: structured clone turns every Buffer into a plain Uint8Array.
 export type Wire<T> = T extends Uint8Array ? Uint8Array : T extends readonly (infer U)[] ? readonly Wire<U>[] : T extends object ? { readonly [K in keyof T]: Wire<T[K]> } : T;
@@ -28,7 +39,11 @@ export type SuonetarApi = {
 	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
 	// Undoes the branch's last Suonetar move, as `SessionState`'s `undo` described it.
 	readonly undo: (old: string, newTip: string, kind: "exact" | "edits") => Promise<Result<Wire<UndoResult>>>;
-	// Stops the long operation in progress (the pre-commit pass of an apply), which then returns `cancelled`.
+	// The configured `merge.tool`, or undefined when there is none.
+	readonly mergetoolName: () => Promise<Result<string | undefined>>;
+	// Opens one path of a content conflict in the merge tool, starting from `content`; waits until the tool is closed or `cancel` is called.
+	readonly mergetool: (inputs: MergeInputs, key: string, path: string, content: Uint8Array) => Promise<Result<Wire<MergetoolOutcome>>>;
+	// Stops the long operation in progress (the pre-commit pass of an apply, or waiting for a merge tool), which then returns `cancelled`.
 	readonly cancel: () => Promise<Result<undefined>>;
 };
 

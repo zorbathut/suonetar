@@ -465,7 +465,14 @@ async function resolveDone(): Promise<void> {
 	await leaveAndShow(followed, undefined);
 }
 
-const resolveHost: ResolveViewHost = { op, onResolved: resolveDone };
+const resolveHost: ResolveViewHost = {
+	op,
+	onResolved: resolveDone,
+	busy: (on, message) => {
+		busySet(on);
+		statusSet(message, "info");
+	},
+};
 
 // What the user should agree to before an apply that cannot be taken back without the reflog.
 function applyWarnings(steps: readonly { readonly oid: string; readonly rewrite: boolean; readonly dropsSignature: boolean }[]): string[] {
@@ -797,7 +804,7 @@ window.addEventListener("drop", (event) => event.preventDefault());
 
 window.suonetarShell.onCloseRequest(async () => {
 	if (busy) {
-		statusSet("An apply is running; close the window once it has finished.", "error");
+		statusSet("An apply or a merge tool is running; close the window once it has finished, or cancel it.", "error");
 		return false;
 	}
 	let ok = false;
