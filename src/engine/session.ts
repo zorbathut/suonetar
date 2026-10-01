@@ -9,6 +9,7 @@ import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeD
 import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
+import { reflogMessage } from "./undo.ts";
 import { WorktreePrivate } from "./worktree-private.ts";
 import { blobWrite, signingWanted } from "./write.ts";
 
@@ -405,7 +406,7 @@ export class Session {
 		progress({ step: "write" });
 		const { tip, rewritten } = await replayCommit(this.repo, plan.stack.baseOid, steps, await signingWanted(this.repo));
 		progress({ step: "publish" });
-		const published = await publish(this.repo, plan.stack.branch, plan.stack.tipOid, tip, `suonetar: apply ${rewritten.length} commits`);
+		const published = await publish(this.repo, plan.stack.branch, plan.stack.tipOid, tip, reflogMessage("apply", rewritten.length, plan.stack.tipOid));
 		if (published.kind !== "published") {
 			return published;
 		}

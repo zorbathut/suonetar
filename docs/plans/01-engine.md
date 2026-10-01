@@ -164,7 +164,7 @@ A hostile review (Opus, 2026-09-30) raised four blocking and ten should-fix obje
 
 - The editor edits the raw commit plus its own draft; drafts on lower commits are not shown in it. Replay merges them, and a preview view can come later.
 - Live-follow: the UI polls `session.generation()`, which is one `rev-parse`.
-- Reflog messages are `suonetar: apply <n> commits`; old and new commits correspond one to one in order, since the tool never drops or reorders commits.
+- Reflog messages are `suonetar: apply <n> commits` (since plan 04, `… from <old tip>`); old and new commits correspond one to one in order, since the tool never drops or reorders commits.
 - Honest limit: `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` destroys replaced commits; drafts and resolutions survive it.
 
 ## Revisions after code review

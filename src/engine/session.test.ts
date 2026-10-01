@@ -63,7 +63,9 @@ describe("session drafts", () => {
 		await session.draftSetFile(c3, "b.txt", null);
 		const files = (await session.commitDocument(c3)).files;
 		expect(Object.fromEntries(files.map((f) => [f.path, f.status]))).toEqual({ "b.txt": "D", "new/file.txt": "A", "run.sh": "A" });
+		const before = fx.git("rev-parse", "HEAD");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
+		expect(fx.git("reflog", "-1", "--format=%gs", "feature")).toBe(`suonetar: apply 1 commit from ${before}`);
 		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
 		expect(readFileSync(join(fx.dir, "new/file.txt"), "utf8")).toBe("new\n");
 	});
@@ -121,7 +123,9 @@ describe("session drafts", () => {
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c3, "run.sh", null);
 		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
+		const before = fx.git("rev-parse", "HEAD");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
+		expect(fx.git("reflog", "-1", "--format=%gs", "feature")).toBe(`suonetar: apply 1 commit from ${before}`);
 		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
 	});
 

@@ -45,8 +45,8 @@ describe("apply", () => {
 		expect(fx.git("show", "HEAD~1:a.txt")).toBe(edited.trimEnd());
 		expect(disk("a.txt")).toBe(edited);
 		expect(fx.git("status", "--porcelain")).toBe("");
-		expect(fx.git("reflog", "-1", "--format=%gs", "feature")).toBe("suonetar: apply 2 commits");
-		expect(fx.git("reflog", "-1", "--format=%gs", "HEAD")).toBe("suonetar: apply 2 commits");
+		expect(fx.git("reflog", "-1", "--format=%gs", "feature")).toBe(`suonetar: apply 2 commits from ${c2}`);
+		expect(fx.git("reflog", "-1", "--format=%gs", "HEAD")).toBe(`suonetar: apply 2 commits from ${c2}`);
 		const state = await session.state();
 		expect(state.kind === "ready" && state.drafts).toEqual([]);
 		expect(existsSync(join(fx.dir, ".git", "index.lock"))).toBe(false);
