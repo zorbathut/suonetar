@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileTree, sectionCurrentForView, type TreeNode, treeHighlightTarget } from "./file-tree.ts";
+import { fileTree, fileTreeOrder, sectionCurrentForView, type TreeNode, treeHighlightTarget } from "./file-tree.ts";
 
 // The tree as indented lines: directories end in "/", files carry their status.
 function show(nodes: readonly TreeNode[], depth = 0): string[] {
@@ -34,6 +34,11 @@ describe("fileTree", () => {
 	it("does not merge a directory holding files, or one with a file beside a subdirectory", () => {
 		expect(show(fileTree([f("src/main.ts"), f("src/lib/x.ts")]))).toEqual(["src/ [src]", "  lib/ [src/lib]", "    x.ts M", "  main.ts M"]);
 		expect(show(fileTree([f("a/b/only.ts")]))).toEqual(["a/b/ [a/b]", "  only.ts M"]);
+	});
+
+	it("lists its files top to bottom, which is the order the document shows them in", () => {
+		const order = fileTreeOrder(fileTree([f("b.txt"), f("src/z.ts"), f("README.md"), f("src/lib/q.ts"), f("src/a.ts")]));
+		expect(order).toEqual(["src/lib/q.ts", "src/a.ts", "src/z.ts", "README.md", "b.txt"]);
 	});
 
 	it("handles root files and nothing at all", () => {

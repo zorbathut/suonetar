@@ -8,7 +8,7 @@ import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
 import { editorCreate } from "./editor.ts";
 import { statusClass, statusLabel } from "./file-status.ts";
-import { fileTree, fileTreeHighlight, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
+import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 
@@ -174,7 +174,13 @@ export class CommitView {
 		if (doc.files.length === 0) {
 			this.root.append(el("div", { class: "note", text: "No files changed." }));
 		}
-		for (const file of doc.files) {
+		// In the tree's order, so reading down the document walks down the tree.
+		const byPath = new Map(doc.files.map((file) => [file.path, file]));
+		for (const path of fileTreeOrder(this.#tree)) {
+			const file = byPath.get(path);
+			if (file === undefined) {
+				throw new Error(`${path} is in the file tree but not in the document`);
+			}
 			const section = this.#sectionCreate(file);
 			this.#sections.push(section);
 			this.root.append(section.root);

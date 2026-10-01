@@ -56,6 +56,11 @@ export function fileTree(files: readonly { readonly path: string; readonly statu
 	return nodesOf(root, "");
 }
 
+// The tree's files in the order it shows them, top to bottom.
+export function fileTreeOrder(nodes: readonly TreeNode[]): string[] {
+	return nodes.flatMap((node) => (node.kind === "file" ? [node.path] : fileTreeOrder(node.children)));
+}
+
 // Which section the reader is at: the focused one while it is in view, else the first not yet scrolled past, else (scrolled past them all) the last; `top`/`bottom` are the viewport's edges, and -1 means no sections.
 export function sectionCurrentForView(rects: readonly { readonly top: number; readonly bottom: number }[], focused: number, top: number, bottom: number): number {
 	const focusedRect = rects[focused];
