@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { delimiter } from "node:path";
 import { ErrorGit } from "./errors.ts";
 
 export type Oid = string;
@@ -13,8 +14,18 @@ export type GitCallOptions = {
 
 export type GitRunner = (args: readonly string[], opts: GitCallOptions) => Promise<GitResult>;
 
+// A hook's exit code and its whole transcript (stdout and stderr interleaved as they arrived); `code` is null when a signal ended it.
+export type HookResult = { readonly code: number | null; readonly output: string };
+
+// Runs `git <args>` for a hook: the user's own environment rather than the engine's fixed one, and the whole process group cleaned up afterwards.
+export type HookRunner = (
+	args: readonly string[],
+	opts: { readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly signal: AbortSignal },
+) => Promise<HookResult>;
+
 export type Repo = {
 	readonly run: GitRunner;
+	readonly runHook: HookRunner;
 	readonly worktree: string;
 	readonly gitDir: string;
 	readonly commonDir: string;
@@ -63,6 +74,133 @@ export function gitRunnerSpawn(): GitRunner {
 		});
 }
 
+// The environment a hook sees: the user's, without variables that would redirect git to another repository and without what `npm run` injects (its package's `node_modules/.bin` on PATH would hand the hook Suonetar's own tools).
+function envHook(extra: Readonly<Record<string, string>>): Record<string, string> {
+	const env: Record<string, string> = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (value !== undefined && !ENV_STRIPPED.includes(key) && !key.startsWith("npm_") && key !== "INIT_CWD") {
+			env[key] = value;
+		}
+	}
+	if (env.PATH !== undefined) {
+		env.PATH = env.PATH.split(delimiter)
+			.filter((dir) => !/[/\\]node_modules[/\\]\.bin$/.test(dir) && !/[/\\]node-gyp-bin$/.test(dir))
+			.join(delimiter);
+	}
+	// npx without a terminal assumes --yes and downloads whatever is missing; in a checkout without node_modules it must fail instead.
+	return { ...env, npm_config_yes: "false", ...extra };
+}
+
+// How long a hook's output pipes may stay open after it exits (a background child still holding them) before the group is killed.
+const HOOK_DRAIN_MS = 200;
+// After a cancel, how long the hook's process group gets to clean up after SIGTERM before SIGKILL.
+const HOOK_KILL_GRACE_MS = 2000;
+const HOOK_OUTPUT_LIMIT = 64 * 1024;
+
+// Signals a process group; false once the group no longer exists. A failure to signal is not an error the caller can act on, so it is returned as text for the transcript.
+function groupSignal(pid: number, signal: NodeJS.Signals | 0): { alive: boolean; problem: string | undefined } {
+	try {
+		process.kill(-pid, signal);
+		return { alive: true, problem: undefined };
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		return code === "ESRCH" ? { alive: false, problem: undefined } : { alive: true, problem: `signalling the hook's processes failed: ${(err as Error).message}` };
+	}
+}
+
+// The last `limit` bytes of the output, starting at a character boundary.
+function outputTail(chunks: readonly Buffer[], limit: number): string {
+	const all = Buffer.concat(chunks);
+	let start = Math.max(0, all.length - limit);
+	while (start < all.length && start > 0 && ((all[start] as number) & 0xc0) === 0x80) {
+		start += 1;
+	}
+	return all.subarray(start).toString("utf8");
+}
+
+export function hookRunnerSpawn(): HookRunner {
+	return (args, opts) =>
+		new Promise((resolve, reject) => {
+			if (opts.signal.aborted) {
+				resolve({ code: null, output: "" });
+				return;
+			}
+			// Its own process group, so the hook's children (a framework, its interpreter, the formatter) can be killed with it.
+			const child = spawn("git", args, { cwd: opts.cwd, env: envHook(opts.env), stdio: ["ignore", "pipe", "pipe"], detached: true });
+			let chunks: Buffer[] = [];
+			let buffered = 0;
+			const problems: string[] = [];
+			const collect = (chunk: Buffer) => {
+				chunks.push(chunk);
+				buffered += chunk.length;
+				if (buffered > 2 * HOOK_OUTPUT_LIMIT) {
+					const tail = Buffer.from(outputTail(chunks, HOOK_OUTPUT_LIMIT), "utf8");
+					chunks = [tail];
+					buffered = tail.length;
+				}
+			};
+			child.stdout.on("data", collect);
+			child.stderr.on("data", collect);
+			const signal = (sig: NodeJS.Signals | 0): boolean => {
+				if (child.pid === undefined) {
+					return false;
+				}
+				const result = groupSignal(child.pid, sig);
+				if (result.problem !== undefined) {
+					problems.push(result.problem);
+				}
+				return result.alive;
+			};
+			let abortedAt: number | undefined;
+			const onAbort = () => {
+				abortedAt = Date.now();
+				signal("SIGTERM");
+			};
+			opts.signal.addEventListener("abort", onAbort, { once: true });
+			child.on("error", (err) => {
+				opts.signal.removeEventListener("abort", onAbort);
+				reject(err);
+			});
+			let exited = false;
+			let code: number | null = null;
+			let pipesOpen = 2;
+			let settled = false;
+			// Settles on exit rather than on close: a daemon the hook left behind can hold the pipes open indefinitely. After a cancel the group gets its grace period to clean up (lint-staged restores its backup) before SIGKILL.
+			const settle = () => {
+				if (settled || !exited) {
+					return;
+				}
+				const graceLeft = abortedAt === undefined ? 0 : abortedAt + HOOK_KILL_GRACE_MS - Date.now();
+				if (graceLeft > 0 && signal(0)) {
+					setTimeout(settle, Math.min(100, graceLeft));
+					return;
+				}
+				settled = true;
+				opts.signal.removeEventListener("abort", onAbort);
+				signal("SIGKILL");
+				const output = outputTail(chunks, HOOK_OUTPUT_LIMIT) + problems.map((p) => `\n(${p})`).join("");
+				resolve({ code, output });
+			};
+			const pipeClosed = () => {
+				pipesOpen -= 1;
+				if (pipesOpen === 0) {
+					settle();
+				}
+			};
+			child.stdout.once("close", pipeClosed);
+			child.stderr.once("close", pipeClosed);
+			child.on("exit", (exitCode) => {
+				exited = true;
+				code = exitCode;
+				if (pipesOpen === 0) {
+					settle();
+				} else {
+					setTimeout(settle, HOOK_DRAIN_MS);
+				}
+			});
+		});
+}
+
 export async function gitOk(repo: Repo, args: readonly string[], opts: { input?: string | Buffer; env?: Readonly<Record<string, string>> } = {}): Promise<Buffer> {
 	const result = await repo.run(args, { cwd: repo.worktree, ...opts });
 	if (result.code !== 0) {
@@ -75,7 +213,7 @@ export async function gitText(repo: Repo, args: readonly string[], opts: { input
 	return (await gitOk(repo, args, opts)).toString("utf8").replace(/\n$/, "");
 }
 
-export async function repoOpen(run: GitRunner, path: string, envExtra: Readonly<Record<string, string>> = {}): Promise<Repo> {
+export async function repoOpen(run: GitRunner, runHook: HookRunner, path: string, envExtra: Readonly<Record<string, string>> = {}): Promise<Repo> {
 	const probe = await run(["rev-parse", "--show-toplevel", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir"], { cwd: path });
 	if (probe.code !== 0) {
 		throw new ErrorGit(["rev-parse"], probe.code, probe.stderr);
@@ -84,7 +222,7 @@ export async function repoOpen(run: GitRunner, path: string, envExtra: Readonly<
 	if (worktree === undefined || gitDir === undefined || commonDir === undefined) {
 		throw new Error(`unexpected rev-parse output: ${probe.stdout.toString("utf8")}`);
 	}
-	return { run, worktree, gitDir, commonDir, envExtra };
+	return { run, runHook, worktree, gitDir, commonDir, envExtra };
 }
 
 // Splits NUL-terminated output, dropping the empty string after the final terminator.

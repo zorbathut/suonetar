@@ -1,7 +1,7 @@
 import { intentCheck, type PublishResult, publish } from "./apply.ts";
 import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
-import { gitOk, gitRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
+import { gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
 import { type Conflict, mergeTrees } from "./merge.ts";
 import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff } from "./objects.ts";
 import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees } from "./replay.ts";
@@ -104,7 +104,7 @@ export class Session {
 	}
 
 	static async open(path: string): Promise<Session> {
-		return Session.openRepo(await repoOpen(gitRunnerSpawn(), path));
+		return Session.openRepo(await repoOpen(gitRunnerSpawn(), hookRunnerSpawn(), path));
 	}
 
 	static async openRepo(repo: Repo): Promise<Session> {

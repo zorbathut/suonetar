@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type GitRunner, gitRunnerSpawn, type Repo, repoOpen } from "../git.ts";
+import { type GitRunner, gitRunnerSpawn, hookRunnerSpawn, type Repo, repoOpen } from "../git.ts";
 
 export type Fixture = {
 	readonly dir: string;
@@ -49,7 +49,7 @@ export async function repoFixture(): Promise<Fixture> {
 	const fixture: Fixture = {
 		dir,
 		// The engine's runner sees the same isolated config as the fixture's own git calls.
-		repo: await repoOpen(runnerIsolated(dir), dir, envIsolated(dir)),
+		repo: await repoOpen(runnerIsolated(dir), hookRunnerSpawn(), dir, envIsolated(dir)),
 		git: (...args) => gitSync(args),
 		gitTry: (...args) => {
 			try {
