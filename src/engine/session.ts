@@ -12,6 +12,7 @@ import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees
 import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
 import { reflogMessage, type UndoInfo, undoAssess, undoDrafts } from "./undo.ts";
+import { type WorktreeSide, type WorktreeStatus, worktreeFiles, worktreeStatus } from "./worktree-changes.ts";
 import { WorktreePrivate } from "./worktree-private.ts";
 import { blobWrite, signingWanted } from "./write.ts";
 
@@ -73,6 +74,9 @@ export type UndoResult =
 
 export type MergetoolOutcome = MergetoolResult | { readonly kind: "stale" };
 
+// The staged or unstaged changes as a read-only document; `omitted` files were left out past the cap.
+export type WorktreeDocument = { readonly side: WorktreeSide; readonly files: readonly DocumentFile[]; readonly omitted: number; readonly conflicted: boolean };
+
 export type DocumentFile = {
 	readonly path: string;
 	// Status of the file in the commit as it would be published (with the draft); "=" when the draft undoes the commit's whole change to it.
@@ -109,6 +113,8 @@ export type ResolutionChoice =
 export type ResolveResult = { readonly kind: "resolved" } | { readonly kind: "invalid"; readonly reason: string };
 
 const BLOB_LIMIT = 4 * 1024 * 1024;
+// Uncommitted files shown, and stat-ed per poll, at most: an agent's `npm install` into an unignored directory would otherwise flood both.
+const WORKTREE_FILES_MAX = 2000;
 
 // Serialises every operation on a repository, across all sessions in this process: an autosave landing in the middle of an apply must not interleave with it.
 class Mutex {
@@ -399,6 +405,15 @@ export class Session {
 				this.#abort = undefined;
 			}
 		}
+	}
+
+	// The working tree's staged and unstaged change counts, cheap enough to poll.
+	worktreeStatus(): Promise<WorktreeStatus> {
+		return this.#mutex.run(() => worktreeStatus(this.repo, WORKTREE_FILES_MAX));
+	}
+
+	worktreeDocument(side: WorktreeSide): Promise<WorktreeDocument> {
+		return this.#mutex.run(async () => ({ side, ...(await worktreeFiles(this.repo, this.#cat, side, WORKTREE_FILES_MAX, BLOB_LIMIT)) }));
 	}
 
 	// A path's EditorConfig indentation as of `tree`, for editors that show something other than a document file (a conflict's marker file).
