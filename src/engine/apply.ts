@@ -25,7 +25,7 @@ import { dirname, join } from "node:path";
 import { ErrorNotOnBranch } from "./errors.ts";
 import { argChunks, gitOk, gitText, type Oid, type Repo, splitNul } from "./git.ts";
 import { type TreeSide, treeDiffRaw } from "./objects.ts";
-import { branchCurrent } from "./stack.ts";
+import { branchCurrent, configBool } from "./stack.ts";
 
 // How far an apply got; recorded in the intent file at every transition so a crash can be classified exactly.
 export type Phase = "locking" | "locked" | "worktree-updated" | "ref-moved";
@@ -422,15 +422,16 @@ async function revertWorktree(repo: Repo, oldTip: Oid, newTip: Oid, env: Record<
 		}
 	}
 	const changes = await treeDiffRaw(repo, oldTip, newTip);
+	const checkout: Checkout = { fileMode: await configBool(repo, "core.fileMode", true), symlinks: await configBool(repo, "core.symlinks", true) };
 	const unreverted: string[] = [];
 	const removals: string[] = [];
 	const restores: { path: string; side: { mode: string; oid: Oid } }[] = [];
 	for (const change of changes) {
 		const disk = await diskSide(repo, change.path);
-		if (sameSide(disk, change.old)) {
+		if (sameSide(disk, change.old, checkout)) {
 			continue;
 		}
-		if (!sameSide(disk, change.new)) {
+		if (!sameSide(disk, change.new, checkout)) {
 			unreverted.push(change.path);
 			continue;
 		}
@@ -453,12 +454,27 @@ async function revertWorktree(repo: Repo, oldTip: Oid, newTip: Oid, env: Record<
 	return unreverted;
 }
 
+// Which modes the worktree can show, by git's own settings (Git for Windows turns both off).
+type Checkout = { readonly fileMode: boolean; readonly symlinks: boolean };
+
 // A directory on disk matches no tree entry of a file path.
-function sameSide(a: TreeSide | "directory", b: TreeSide): boolean {
+function sameSide(a: TreeSide | "directory", b: TreeSide, checkout: Checkout): boolean {
 	if (a === "directory") {
 		return false;
 	}
-	return a === undefined ? b === undefined : b !== undefined && a.oid === b.oid && a.mode === b.mode;
+	return a === undefined ? b === undefined : b !== undefined && a.oid === b.oid && modeSame(a.mode, b.mode, checkout);
+}
+
+// A regular file on disk stands for whatever the checkout cannot show: either file mode without core.fileMode, a symlink (as a file holding its target) without core.symlinks.
+function modeSame(disk: string, tree: string, checkout: Checkout): boolean {
+	const regular = (mode: string) => mode === "100644" || mode === "100755";
+	if (disk === tree) {
+		return true;
+	}
+	if (!regular(disk)) {
+		return false;
+	}
+	return (!checkout.fileMode && regular(tree)) || (!checkout.symlinks && tree === "120000");
 }
 
 // What the file at `path` would be as a tree entry, or undefined when there is none (absent, or a directory stands there).

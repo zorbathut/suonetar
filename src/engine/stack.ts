@@ -48,6 +48,18 @@ export async function configGet(repo: Repo, key: string): Promise<string | undef
 	return result.stdout.toString("utf8").trim();
 }
 
+// A boolean setting as git reads one (`yes`, `on`, `1`...), or `absent` when it is not set.
+export async function configBool(repo: Repo, key: string, absent: boolean): Promise<boolean> {
+	const result = await repo.run(["config", "--type=bool", "--get", key], { cwd: repo.worktree });
+	if (result.code === 1) {
+		return absent;
+	}
+	if (result.code !== 0) {
+		throw new Error(`git config --type=bool --get ${key} failed: ${result.stderr}`);
+	}
+	return result.stdout.toString("utf8").trim() === "true";
+}
+
 async function isAncestor(repo: Repo, ancestor: Oid, descendant: Oid): Promise<boolean> {
 	const result = await repo.run(["merge-base", "--is-ancestor", ancestor, descendant], { cwd: repo.worktree });
 	if (result.code > 1) {

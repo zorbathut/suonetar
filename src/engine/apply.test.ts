@@ -348,6 +348,31 @@ describe("apply", () => {
 		expect(readFileSync(join(fx.dir, ".git", "index.lock"), "utf8")).toBe("someone else's");
 	});
 
+	test("backing out file by file restores files whose mode the checkout cannot show, as git's config says", async () => {
+		// What Git for Windows checks out: no executable bit, symlinks as plain files holding their target.
+		fx.git("config", "core.fileMode", "off");
+		fx.git("config", "core.symlinks", "no");
+		fx.write("run.sh", "#!/bin/sh\n");
+		fx.git("add", "--chmod=+x", "run.sh");
+		fx.symlinkStage("link", "a.txt");
+		const c3 = fx.commit("c3", {});
+		fx.symlinkStage("link", "b.txt");
+		const c4 = fx.commit("c4", {});
+		fx.git("checkout", "--", "link");
+		const s = await sessionWith(beforeRefTransaction, () => {
+			chmodSync(join(fx.dir, "run.sh"), 0o644);
+			// An edit by the other process stops the whole-tree revert, so each file is checked on its own.
+			fx.write("a.txt", "claude rewrote this\n");
+			fx.git("reset", "-q", "--soft", "HEAD~1");
+		});
+		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await s.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho edited\n"));
+		await s.draftRestore(c4, "link", "parent");
+		expect(await s.apply({ kind: "run", skip: [] }, () => undefined)).toMatchObject({ kind: "moved", unreverted: ["a.txt"] });
+		expect(disk("run.sh")).toBe("#!/bin/sh\n");
+		expect(disk("link")).toBe("b.txt");
+	});
+
 	test("backing out restores files that became directories and removes added files", async () => {
 		const s = await sessionWith(beforeRefTransaction, () => {
 			fx.git("reset", "-q", "--soft", "HEAD~1");
