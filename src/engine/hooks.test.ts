@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Oid } from "./git.ts";
 import { type HookChoice, Session } from "./session.ts";
 import { type Fixture, lineSet, lines, repoFixture, shPath } from "./test-support/repo.ts";
+import { TIMEOUT_SCALE } from "./test-support/timeout.ts";
 
 const RUN: HookChoice = { kind: "run", skip: [] };
 
@@ -324,7 +325,7 @@ exit $changed`);
 		expect(state.kind === "ready" ? state.drafts.length : -1).toBe(0);
 	});
 
-	test("a commit touching tens of thousands of files", async () => {
+	test("a commit touching tens of thousands of files", { timeout: 120000 * TIMEOUT_SCALE }, async () => {
 		fx.git("reset", "-q", "--hard", "main");
 		c1 = fx.commit("c1", { "a.txt": "edited by c1\n" });
 		const blob = fx.git("hash-object", "-w", "/dev/null");
@@ -340,7 +341,7 @@ exit $changed`);
 		hookInstall("exit 0");
 		await session.draftSetFile(c1, "a.txt", Buffer.from("edited again\n"));
 		expect((await apply()).kind).toBe("published");
-	}, 120000);
+	});
 
 	test("a hook-created file that a later commit's change would drop is a collision, not a loss", async () => {
 		fx.git("reset", "-q", "--hard", "main");
