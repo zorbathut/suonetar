@@ -63,13 +63,29 @@ function draftDescribe(status: DraftStatus): string {
 // What the stack highlights: a commit, or one side of the uncommitted changes.
 export type StackSelection = { readonly oid: string } | { readonly side: WorktreeSide } | undefined;
 
-// The stack, oldest commit at the top as `rebase -i` lists it, then the uncommitted changes, followed by drafts that need a decision.
+// The stack newest first, as `git log` lists it: the uncommitted changes, then the commits down to the base, followed by drafts that need a decision.
 export function stackRender(container: HTMLElement, ready: Ready, worktree: Worktree, selection: StackSelection, handlers: StackViewHandlers): void {
 	const selected = selection === undefined ? undefined : "oid" in selection ? selection.oid : `worktree:${selection.side}`;
 	const stack = ready.stack;
 	const edited = new Set(ready.drafts.flatMap((d) => (d.kind === "current" ? [d.commit.oid] : [])));
 	const rows = el("div", { class: "commit-rows" });
-	for (const commit of stack.commits) {
+	for (const side of ["unstaged", "staged"] as const) {
+		const count = worktree[side];
+		if (count === 0) {
+			continue;
+		}
+		const row = el(
+			"div",
+			{ class: `commit-row worktree-row${selected === `worktree:${side}` ? " selected" : ""}`, onclick: () => handlers.worktreeSelect(side) },
+			el("span", { class: "subject", text: worktreeLabel(side) }),
+			el("span", { class: "badges" }, el("span", { class: "badge", text: `${count} file${count === 1 ? "" : "s"}` })),
+		);
+		if (side === "unstaged" && worktree.conflicted) {
+			row.title = "The index has unresolved conflicts";
+		}
+		rows.append(row);
+	}
+	for (const commit of [...stack.commits].reverse()) {
 		const badges = el("span", { class: "badges" });
 		if (edited.has(commit.oid)) {
 			badges.append(el("span", { class: "badge badge-draft", text: "edited", title: "Has edits not yet applied" }));
@@ -92,27 +108,11 @@ export function stackRender(container: HTMLElement, ready: Ready, worktree: Work
 		);
 		rows.append(row);
 	}
-	for (const side of ["staged", "unstaged"] as const) {
-		const count = worktree[side];
-		if (count === 0) {
-			continue;
-		}
-		const row = el(
-			"div",
-			{ class: `commit-row worktree-row${selected === `worktree:${side}` ? " selected" : ""}`, onclick: () => handlers.worktreeSelect(side) },
-			el("span", { class: "subject", text: worktreeLabel(side) }),
-			el("span", { class: "badges" }, el("span", { class: "badge", text: `${count} file${count === 1 ? "" : "s"}` })),
-		);
-		if (side === "unstaged" && worktree.conflicted) {
-			row.title = "The index has unresolved conflicts";
-		}
-		rows.append(row);
-	}
-	const base = el("div", { class: "stack-base", text: `on ${branchShort(stack.baseRef)} at ${stack.baseOid.slice(0, 7)}` });
-	const parts: HTMLElement[] = [base, rows];
+	const parts: HTMLElement[] = [rows];
 	if (stack.frozenBelow !== undefined) {
-		parts.unshift(el("div", { class: "note", text: `The stack starts above merge ${stack.frozenBelow.slice(0, 7)}; commits below it are not editable.` }));
+		parts.push(el("div", { class: "note", text: `The stack starts above merge ${stack.frozenBelow.slice(0, 7)}; commits below it are not editable.` }));
 	}
+	parts.push(el("div", { class: "stack-base", text: `on ${branchShort(stack.baseRef)} at ${stack.baseOid.slice(0, 7)}` }));
 	if (stack.leftBehind.length > 0) {
 		parts.push(el("div", { class: "note", text: `Also on ${stack.leftBehind.join(", ")}: those branches keep the old commits when this stack is rewritten.` }));
 	}

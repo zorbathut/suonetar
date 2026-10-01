@@ -25,7 +25,7 @@ A relative path resolves against the directory npm was run from. `npm run dev --
 
 ## Using it
 
-**The stack.** The left pane lists the commits on the checked-out branch above its base, oldest first, opening on the newest. When the branch is on the server (where `git push` sends it, or a branch of the same name on `origin` or `upstream`) and has commits that aren't there yet, the base is that copy, so the stack is your unpushed work. Otherwise, when everything is pushed or nothing is, the base is where the branch left the default branch of `origin` or `upstream` (or its local copy, `init.defaultBranch`, `main`, `master`); on the default branch itself that leaves nothing to edit. Commits already on a remote are marked *pushed*, since rewriting them means a force-push. The base moves as commits are made and pushed: an edit to a commit that drops below it is kept and listed, and comes back once the branch is pushed. To edit further back, set the base explicitly:
+**The stack.** The left pane lists the commits on the checked-out branch above its base, newest first as `git log` lists them, opening on the newest. When the branch is on the server (where `git push` sends it, or a branch of the same name on `origin` or `upstream`) and has commits that aren't there yet, the base is that copy, so the stack is your unpushed work. Otherwise, when everything is pushed or nothing is, the base is where the branch left the default branch of `origin` or `upstream` (or its local copy, `init.defaultBranch`, `main`, `master`); on the default branch itself that leaves nothing to edit. Commits already on a remote are marked *pushed*, since rewriting them means a force-push. The base moves as commits are made and pushed: an edit to a commit that drops below it is kept and listed, and comes back once the branch is pushed. To edit further back, set the base explicitly:
 
 ```sh
 git config suonetar.base origin/main
@@ -41,7 +41,7 @@ git config suonetar.base origin/main
 
 **Undo** sits next to Apply. If nothing has moved the branch since the last apply, it puts back exactly the commits it had (same SHAs and signatures), and pressing it again redoes. If commits were made on top since, it prepares edits that restore the old commits for you to review and Apply. It is one level deep; [docs/recovery.md](docs/recovery.md) shows how to go further back by hand. (note: a human has not reviewed this yet)
 
-**Keys.** Alt+PageUp / Alt+PageDown move between commits and on to the uncommitted changes, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads.
+**Keys.** Alt+PageUp / Alt+PageDown move up and down the stack, uncommitted changes included, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads.
 
 ## Alongside an agent
 

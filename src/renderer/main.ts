@@ -816,12 +816,12 @@ window.suonetarShell.onApplyProgress((progress) => {
 	}
 });
 
-// Steps through the commits and then the uncommitted changes, as the stack lists them.
+// Steps through the uncommitted changes and the commits as the stack lists them, newest first: 1 moves down the list, to older.
 function commitStep(dir: 1 | -1): void {
 	void op("Selecting", async () => {
 		const items: ({ readonly oid: string } | { readonly side: WorktreeSide })[] = [
-			...(ready?.stack.commits ?? []).map((c) => ({ oid: c.oid })),
-			...(["staged", "unstaged"] as const).filter((side) => worktree[side] > 0).map((side) => ({ side })),
+			...(["unstaged", "staged"] as const).filter((side) => worktree[side] > 0).map((side) => ({ side })),
+			...[...(ready?.stack.commits ?? [])].reverse().map((c) => ({ oid: c.oid })),
 		];
 		const shownSide = view.kind === "worktree" ? view.side : undefined;
 		const index = items.findIndex((item) => ("side" in item ? item.side === shownSide : shownSide === undefined && item.oid === selected?.oid));
