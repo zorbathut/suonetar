@@ -1,13 +1,16 @@
 import type { SessionState } from "../engine/session.ts";
-import type { Wire } from "../shared/api.ts";
+import type { WorktreeSide } from "../engine/worktree-changes.ts";
+import type { ApiValue, Wire } from "../shared/api.ts";
 import { button, el } from "./dom.ts";
 import type { StackSummary } from "./view-decide.ts";
 
 export type Ready = Extract<Wire<SessionState>, { kind: "ready" }>;
+export type Worktree = ApiValue<"worktreeStatus">;
 export type DraftStatus = Ready["drafts"][number];
 
 export type StackViewHandlers = {
 	readonly select: (oid: string) => void;
+	readonly worktreeSelect: (side: WorktreeSide) => void;
 	readonly draftView: (status: DraftStatus) => void;
 	readonly draftConfirm: (status: DraftStatus) => void;
 	readonly draftAdopt: (status: DraftStatus) => void;
@@ -19,13 +22,18 @@ export function draftPendingFor(ready: Ready, oid: string): DraftStatus | undefi
 	return ready.drafts.find((d) => ((d.kind === "rebased" || d.kind === "conflict") && d.commit.oid === oid) || (d.kind === "elsewhere" && d.draft.meta.against === oid));
 }
 
-export function stackSummary(ready: Ready): StackSummary {
+export function stackSummary(ready: Ready, worktree: Worktree): StackSummary {
 	const commits = ready.stack.commits;
 	return {
 		commits,
 		pending: new Set(commits.filter((c) => draftPendingFor(ready, c.oid) !== undefined).map((c) => c.oid)),
 		drafts: new Set(ready.drafts.map((d) => d.draft.meta.against)),
+		worktree: { staged: worktree.staged, unstaged: worktree.unstaged },
 	};
+}
+
+export function worktreeLabel(side: WorktreeSide): string {
+	return side === "staged" ? "Staged changes" : "Unstaged changes";
 }
 
 export function branchShort(ref: string): string {
@@ -52,8 +60,12 @@ function draftDescribe(status: DraftStatus): string {
 	}
 }
 
-// The stack, oldest commit at the top as `rebase -i` lists it, followed by drafts that need a decision.
-export function stackRender(container: HTMLElement, ready: Ready, selected: string | undefined, handlers: StackViewHandlers): void {
+// What the stack highlights: a commit, or one side of the uncommitted changes.
+export type StackSelection = { readonly oid: string } | { readonly side: WorktreeSide } | undefined;
+
+// The stack, oldest commit at the top as `rebase -i` lists it, then the uncommitted changes, followed by drafts that need a decision.
+export function stackRender(container: HTMLElement, ready: Ready, worktree: Worktree, selection: StackSelection, handlers: StackViewHandlers): void {
+	const selected = selection === undefined ? undefined : "oid" in selection ? selection.oid : `worktree:${selection.side}`;
 	const stack = ready.stack;
 	const edited = new Set(ready.drafts.flatMap((d) => (d.kind === "current" ? [d.commit.oid] : [])));
 	const rows = el("div", { class: "commit-rows" });
@@ -78,6 +90,22 @@ export function stackRender(container: HTMLElement, ready: Ready, selected: stri
 			el("span", { class: "subject", text: commit.subject }),
 			badges,
 		);
+		rows.append(row);
+	}
+	for (const side of ["staged", "unstaged"] as const) {
+		const count = worktree[side];
+		if (count === 0) {
+			continue;
+		}
+		const row = el(
+			"div",
+			{ class: `commit-row worktree-row${selected === `worktree:${side}` ? " selected" : ""}`, onclick: () => handlers.worktreeSelect(side) },
+			el("span", { class: "subject", text: worktreeLabel(side) }),
+			el("span", { class: "badges" }, el("span", { class: "badge", text: `${count} file${count === 1 ? "" : "s"}` })),
+		);
+		if (side === "unstaged" && worktree.conflicted) {
+			row.title = "The index has unresolved conflicts";
+		}
 		rows.append(row);
 	}
 	const base = el("div", { class: "stack-base", text: `on ${branchShort(stack.baseRef)} at ${stack.baseOid.slice(0, 7)}` });

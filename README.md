@@ -41,7 +41,9 @@ git config suonetar.base origin/main
 
 **Undo** sits next to Apply. If nothing has moved the branch since the last apply, it puts back exactly the commits it had (same SHAs and signatures), and pressing it again redoes. If commits were made on top since, it prepares edits that restore the old commits for you to review and Apply. It is one level deep; [docs/recovery.md](docs/recovery.md) shows how to go further back by hand.
 
-**Keys.** Alt+PageUp / Alt+PageDown move between commits, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads.
+**Uncommitted changes.** Below the newest commit, "Staged changes" and "Unstaged changes" list what `git status` would: the index against HEAD, and the working tree against the index with untracked files included (`.gitignore` respected, submodules left out). They open read-only in the same view and follow the files as they change. Suonetar reads them without touching the index or writing anything; files under a clean filter (LFS) show in their working-tree form.
+
+**Keys.** Alt+PageUp / Alt+PageDown move between commits and on to the uncommitted changes, Ctrl+Alt+PageUp / Ctrl+Alt+PageDown between files, F7 / Shift+F7 between changes. Ctrl+S saves now; Ctrl+R reloads.
 
 ## Alongside an agent
 

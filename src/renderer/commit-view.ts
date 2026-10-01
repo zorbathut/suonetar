@@ -1,6 +1,7 @@
 import { getChunks } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import type { CommitDocument, DocumentFile } from "../engine/session.ts";
+import type { WorktreeSide } from "../engine/worktree-changes.ts";
 import type { Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import type { Autosave, AutosaveStatus } from "./autosave.ts";
@@ -11,6 +12,7 @@ import { statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
+import { worktreeLabel } from "./stack-view.ts";
 
 type Doc = Wire<CommitDocument>;
 type File = Wire<DocumentFile>;
@@ -19,7 +21,18 @@ export type CommitViewSource =
 	// `readOnly` explains why a commit's document cannot be edited right now, such as a draft waiting for a decision.
 	| { readonly kind: "commit"; readonly oid: string; readonly readOnly: string | undefined }
 	// A stored draft's own changes, shown read-only.
-	| { readonly kind: "draft"; readonly against: string };
+	| { readonly kind: "draft"; readonly against: string }
+	// The working tree's staged or unstaged changes, shown read-only.
+	| { readonly kind: "worktree"; readonly side: WorktreeSide };
+
+// A view's contents, read ahead of building it so a refresh can swap views without a blank moment; `notes` are shown under the title.
+export type CommitViewLoaded = { readonly doc: Doc; readonly notes: readonly string[] };
+
+export type Carry = {
+	readonly anchor: { readonly path: string; readonly index: number; readonly offset: number } | undefined;
+	readonly expanded: readonly string[];
+	readonly cursor: { readonly path: string; readonly head: number } | undefined;
+};
 
 export type CommitViewHost = {
 	readonly autosave: Autosave<number>;
@@ -46,6 +59,8 @@ type Section = {
 	readonly opaque: boolean;
 	editor: EditorView | undefined;
 	expanded: boolean;
+	// Collapsed when the view was built (large or generated), so expanding it was the reader's choice.
+	readonly collapsedAtFirst: boolean;
 	// Diff against the commit instead of its parent, showing only the draft's edits.
 	mine: boolean;
 	// The editor's text differs from the commit's version; updated as saves land.
@@ -86,7 +101,12 @@ export class CommitView {
 	readonly #doc: Doc;
 	#messageState: HTMLElement | undefined;
 	readonly #tree: readonly TreeNode[];
+	readonly #notes: readonly string[];
 	#destroyed = false;
+	#pointerDown = false;
+	readonly #pointerUp = () => {
+		this.#pointerDown = false;
+	};
 	#highlightFrame: number | undefined;
 	readonly #highlightSchedule = () => {
 		if (this.#highlightFrame === undefined) {
@@ -97,10 +117,11 @@ export class CommitView {
 		}
 	};
 
-	private constructor(host: CommitViewHost, source: CommitViewSource, doc: Doc) {
+	private constructor(host: CommitViewHost, source: CommitViewSource, doc: Doc, notes: readonly string[]) {
 		this.#host = host;
 		this.#source = source;
 		this.#doc = doc;
+		this.#notes = notes;
 		this.#banners = el("div", { class: "banners" });
 		this.root = el("div", { class: "commit-view" }, this.#banners);
 		this.#observer = new IntersectionObserver((entries) => this.#onVisible(entries), { root: host.scroller, rootMargin: "1500px 0px" });
@@ -110,12 +131,41 @@ export class CommitView {
 		host.files.hidden = false;
 		host.scroller.addEventListener("scroll", this.#highlightSchedule, { passive: true });
 		this.root.addEventListener("focusin", this.#highlightSchedule);
+		this.root.addEventListener("pointerdown", () => {
+			this.#pointerDown = true;
+		});
+		window.addEventListener("pointerup", this.#pointerUp);
 		this.#highlightSchedule();
 	}
 
 	static async create(host: CommitViewHost, source: CommitViewSource): Promise<CommitView> {
-		const doc = await call(source.kind === "commit" ? api.commitDocument(source.oid) : api.draftDocument(source.against));
-		return new CommitView(host, source, doc);
+		return CommitView.build(host, source, await CommitView.load(source));
+	}
+
+	static async load(source: CommitViewSource): Promise<CommitViewLoaded> {
+		switch (source.kind) {
+			case "commit":
+				return { doc: await call(api.commitDocument(source.oid)), notes: [] };
+			case "draft":
+				return { doc: await call(api.draftDocument(source.against)), notes: [] };
+			case "worktree": {
+				const worktree = await call(api.worktreeDocument(source.side));
+				const notes = [
+					worktree.conflicted ? "The index has unresolved conflicts (a merge or rebase stopped); conflicted files are shown against our side." : "",
+					worktree.omitted > 0 ? `${worktree.omitted} more file${worktree.omitted === 1 ? " is" : "s are"} not shown.` : "",
+				].filter((n) => n !== "");
+				const doc: Doc = { oid: "", parent: "", subject: worktreeLabel(source.side), message: new Uint8Array(), draftMessage: undefined, hasDraft: false, files: worktree.files };
+				return { doc, notes };
+			}
+			default: {
+				const never: never = source;
+				throw new Error(`unknown view source ${String(never)}`);
+			}
+		}
+	}
+
+	static build(host: CommitViewHost, source: CommitViewSource, loaded: CommitViewLoaded): CommitView {
+		return new CommitView(host, source, loaded.doc, loaded.notes);
 	}
 
 	get oid(): string {
@@ -135,6 +185,7 @@ export class CommitView {
 		this.#destroyed = true;
 		this.#host.scroller.removeEventListener("scroll", this.#highlightSchedule);
 		this.root.removeEventListener("focusin", this.#highlightSchedule);
+		window.removeEventListener("pointerup", this.#pointerUp);
 		if (this.#highlightFrame !== undefined) {
 			cancelAnimationFrame(this.#highlightFrame);
 		}
@@ -156,6 +207,55 @@ export class CommitView {
 		target.textContent = status === "failed" ? `save failed: ${errorText(error)} (retrying)` : status === "saved" ? "" : status === "pending" ? "unsaved" : "saving…";
 	}
 
+	// The reader's place, for a rebuilt view of the same document to return to: the file at the top of the view and how far into it (with its position, should that file be gone), sections they expanded, and the focused editor's cursor.
+	carry(): Carry {
+		const current = this.#sectionCurrent();
+		const section = this.#sections[current];
+		const anchor =
+			section === undefined
+				? undefined
+				: { path: section.file.path, index: current, offset: this.#host.scroller.getBoundingClientRect().top - section.root.getBoundingClientRect().top };
+		const expanded = this.#sections.filter((s) => s.expanded && s.collapsedAtFirst).map((s) => s.file.path);
+		const active = document.activeElement;
+		const focused = this.#sections.find((s) => s.editor !== undefined && active !== null && s.editor.dom.contains(active));
+		const cursor = focused?.editor === undefined ? undefined : { path: focused.file.path, head: focused.editor.state.selection.main.head };
+		return { anchor, expanded, cursor };
+	}
+
+	carryRestore(carry: Carry): void {
+		for (const s of this.#sections) {
+			if (carry.expanded.includes(s.file.path) && !s.expanded) {
+				s.expanded = true;
+				this.#bodyBuild(s, undefined);
+			}
+		}
+		const anchor = carry.anchor;
+		const section =
+			anchor === undefined ? undefined : (this.#sections.find((s) => s.file.path === anchor.path) ?? this.#sections[Math.min(anchor.index, this.#sections.length - 1)]);
+		if (anchor !== undefined && section !== undefined) {
+			this.#editorBuild(section, undefined);
+			const scroller = this.#host.scroller;
+			const offset = section.file.path === anchor.path ? anchor.offset : 0;
+			scroller.scrollTop += section.root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + offset;
+		}
+		const cursor = carry.cursor;
+		const focused = cursor === undefined ? undefined : this.#sections.find((s) => s.file.path === cursor.path);
+		if (cursor !== undefined && focused !== undefined) {
+			this.#editorBuild(focused, undefined);
+			const editor = focused.editor;
+			if (editor !== undefined) {
+				editor.dispatch({ selection: { anchor: Math.min(cursor.head, editor.state.doc.length) } });
+				editor.contentDOM.focus({ preventScroll: true });
+			}
+		}
+	}
+
+	// Whether the reader is in the middle of something a rebuild would undo: pressing the mouse, or holding a selection in the focused editor.
+	holding(): boolean {
+		const active = document.activeElement;
+		return this.#pointerDown || this.#sections.some((s) => s.editor !== undefined && active !== null && s.editor.dom.contains(active) && !s.editor.state.selection.main.empty);
+	}
+
 	sectionReveal(path: string): void {
 		const section = this.#sections.find((s) => s.file.path === path);
 		if (section !== undefined) {
@@ -165,12 +265,21 @@ export class CommitView {
 
 	#render(): void {
 		const doc = this.#doc;
-		const title = el("h1", { class: "commit-title" }, el("span", { class: "oid", text: doc.oid.slice(0, 10) }), " ", doc.subject);
+		const worktree = this.#source.kind === "worktree";
+		const title = worktree
+			? el("h1", { class: "commit-title worktree-title", text: doc.subject })
+			: el("h1", { class: "commit-title" }, el("span", { class: "oid", text: doc.oid.slice(0, 10) }), " ", doc.subject);
 		this.root.append(title);
 		if (this.#source.kind === "commit" && this.#source.readOnly !== undefined) {
 			this.root.append(el("div", { class: "note", text: this.#source.readOnly }));
 		}
-		this.root.append(this.#messageRender());
+		for (const note of this.#notes) {
+			this.root.append(el("div", { class: "note", text: note }));
+		}
+		// Uncommitted changes have no message.
+		if (!worktree) {
+			this.root.append(this.#messageRender());
+		}
 		if (doc.files.length === 0) {
 			this.root.append(el("div", { class: "note", text: "No files changed." }));
 		}
@@ -272,6 +381,7 @@ export class CommitView {
 			opaque,
 			editor: undefined,
 			expanded: !large,
+			collapsedAtFirst: large,
 			mine: false,
 			edited: !bytesEqual(file.draft, file.commit),
 			commitText: undefined,
@@ -342,7 +452,7 @@ export class CommitView {
 		let codec: TextCodec | undefined;
 		let note: string | undefined;
 		if (decoded === undefined) {
-			note = f.commit === undefined ? "Deleted in this commit." : "Deleted by your edit.";
+			note = this.#source.kind === "worktree" ? "Deleted." : f.commit === undefined ? "Deleted in this commit." : "Deleted by your edit.";
 		} else if (decoded.kind === "readonly") {
 			doc = decoded.text;
 			note = `Read-only: the file ${decoded.reason}.`;

@@ -11,7 +11,9 @@ import type {
 	ResolveResult,
 	SessionState,
 	UndoResult,
+	WorktreeDocument,
 } from "../engine/session.ts";
+import type { WorktreeSide, WorktreeStatus } from "../engine/worktree-changes.ts";
 
 // An engine type as it arrives on the other side of IPC: structured clone turns every Buffer into a plain Uint8Array.
 export type Wire<T> = T extends Uint8Array ? Uint8Array : T extends readonly (infer U)[] ? readonly Wire<U>[] : T extends object ? { readonly [K in keyof T]: Wire<T[K]> } : T;
@@ -40,6 +42,10 @@ export type SuonetarApi = {
 	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
 	// Undoes the branch's last Suonetar move, as `SessionState`'s `undo` described it.
 	readonly undo: (old: string, newTip: string, kind: "exact" | "edits") => Promise<Result<Wire<UndoResult>>>;
+	// The working tree's staged and unstaged changes: counts and prints, cheap enough to poll.
+	readonly worktreeStatus: () => Promise<Result<WorktreeStatus>>;
+	// One side of them as a read-only document.
+	readonly worktreeDocument: (side: WorktreeSide) => Promise<Result<Wire<WorktreeDocument>>>;
 	// A path's EditorConfig indentation as of a tree.
 	readonly indentation: (tree: string, path: string) => Promise<Result<Indentation>>;
 	// The configured `merge.tool`, or undefined when there is none.

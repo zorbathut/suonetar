@@ -208,6 +208,12 @@ body.busy #body {
 	min-width: 0;
 }
 
+/* Uncommitted changes: not commits, so set apart from them. */
+.worktree-row .subject,
+.worktree-title {
+	font-style: italic;
+}
+
 .stack-base {
 	padding: 6px 10px;
 	color: var(--fg-dim);

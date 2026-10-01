@@ -1,6 +1,7 @@
 import "./style.css";
 import type { PublishResult } from "../engine/apply.ts";
 import type { HookChoice } from "../engine/session.ts";
+import type { WorktreeSide } from "../engine/worktree-changes.ts";
 import type { ApiValue, Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { Autosave } from "./autosave.ts";
@@ -9,8 +10,8 @@ import { ask, button, el } from "./dom.ts";
 import { type HookSkip, type HookStop, hookSummary, hookViewCreate, progressText } from "./hook-view.ts";
 import type { CommitIdentity } from "./reselect.ts";
 import { type Report, ResolveView, type ResolveViewHost } from "./resolve-view.ts";
-import { branchShort, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary } from "./stack-view.ts";
-import { type ViewDecision, type ViewShown, viewDecide } from "./view-decide.ts";
+import { branchShort, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary, type Worktree } from "./stack-view.ts";
+import { type ViewDecision, type ViewShown, viewDecide, worktreePollAction } from "./view-decide.ts";
 
 function byId(id: string): HTMLElement {
 	const node = document.getElementById(id);
@@ -36,6 +37,8 @@ type View =
 	| { readonly kind: "none" }
 	| { readonly kind: "commit"; readonly view: CommitView; readonly readOnly: boolean }
 	| { readonly kind: "draft"; readonly against: string; readonly view: CommitView }
+	// `print` is the side's print the view was built from; a different one means it is out of date.
+	| { readonly kind: "worktree"; readonly side: WorktreeSide; readonly print: string; readonly view: CommitView }
 	| { readonly kind: "resolve"; readonly view: ResolveView }
 	| { readonly kind: "hook"; readonly stop: HookStop }
 	// Interrupted, unavailable, or an empty stack: a message instead of a document.
@@ -48,6 +51,9 @@ let ready: Ready | undefined;
 let generationSeen: string | undefined;
 let selected: (CommitIdentity & { readonly index: number }) | undefined;
 let view: View = { kind: "none" };
+let worktree: Worktree = { staged: 0, unstaged: 0, conflicted: false, stagedPrint: "", unstagedPrint: "" };
+// When a shown uncommitted-changes view was last rebuilt; rebuilds are spaced out while an agent keeps writing.
+let worktreeRebuilt = 0;
 let busy = false;
 let opRunning = false;
 let opChain: Promise<void> = Promise.resolve();
@@ -142,7 +148,7 @@ async function viewLeave(): Promise<boolean> {
 	if (!(await flushOrAsk(true))) {
 		return false;
 	}
-	if (view.kind === "commit" || view.kind === "draft" || view.kind === "resolve") {
+	if (view.kind === "commit" || view.kind === "draft" || view.kind === "resolve" || view.kind === "worktree") {
 		view.view.destroy();
 	}
 	if (view.kind === "hook") {
@@ -159,6 +165,8 @@ function viewShown(): ViewShown {
 			return { kind: "commit", oid: view.view.oid, readOnly: view.readOnly };
 		case "draft":
 			return { kind: "draft", against: view.against };
+		case "worktree":
+			return { kind: "worktree", side: view.side };
 		case "none":
 		case "blocked":
 		case "resolve":
@@ -176,6 +184,12 @@ async function stateRead(): Promise<SessionState> {
 	const state = await call(api.state());
 	generationSeen = generation;
 	ready = state.kind === "ready" ? state : undefined;
+	// A failure here (git status on a damaged index) must not stop the state, a blocked message included, from showing.
+	try {
+		worktree = await call(api.worktreeStatus());
+	} catch (err) {
+		report("Reading the uncommitted changes failed", err);
+	}
 	topRedraw();
 	return state;
 }
@@ -187,8 +201,10 @@ function stackRedraw(): void {
 		stackEl.replaceChildren();
 		return;
 	}
-	stackRender(stackEl, ready, selected?.oid, {
+	const selection = view.kind === "worktree" ? { side: view.side } : selected === undefined ? undefined : { oid: selected.oid };
+	stackRender(stackEl, ready, worktree, selection, {
 		select: (oid) => void op("Selecting", () => commitSelect(oid)),
+		worktreeSelect: (side) => void op("Selecting", () => worktreeSelect(side)),
 		draftView: (status) => void op("Showing the edit", () => draftShow(status)),
 		draftConfirm: (status) => draftAct("Confirming", () => api.draftConfirm(status.draft.meta.against)),
 		draftAdopt: (status) => draftAct("Adopting", () => api.draftAdopt(status.draft.meta.against)),
@@ -293,6 +309,10 @@ function blockedFor(state: Exclude<SessionState, Ready>): void {
 
 // Builds the view a decision asks for; the previous view is already gone.
 async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: string | undefined): Promise<void> {
+	if (decision.kind === "worktree") {
+		await worktreeShow(decision.side);
+		return;
+	}
 	if (decision.kind === "empty" || ready === undefined) {
 		const stack = ready?.stack;
 		const where =
@@ -323,6 +343,50 @@ async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: s
 	}
 }
 
+// Shows a side of the uncommitted changes, unless it emptied meanwhile (an agent committed), in which case the view follows as for any change.
+async function worktreeSelect(side: WorktreeSide): Promise<void> {
+	await leaveAndShow((summary) => (summary.worktree[side] > 0 ? { kind: "worktree", side } : followed(summary)), undefined);
+}
+
+function worktreePrint(side: WorktreeSide): string {
+	return side === "staged" ? worktree.stagedPrint : worktree.unstagedPrint;
+}
+
+// Shows one side of the uncommitted changes, read-only; the previous view is already gone.
+async function worktreeShow(side: WorktreeSide): Promise<void> {
+	const print = worktreePrint(side);
+	const loaded = await CommitView.load({ kind: "worktree", side });
+	filesEl.hidden = false;
+	const cv = CommitView.build(commitHost, { kind: "worktree", side }, loaded);
+	docEl.replaceChildren(cv.root);
+	docEl.scrollTop = 0;
+	view = { kind: "worktree", side, print, view: cv };
+	worktreeRebuilt = Date.now();
+	stackRedraw();
+}
+
+// Rebuilds a shown uncommitted-changes view whose files changed, in place: the new contents are read first and swapped in at once, returning to the same place in the same file, since the reader is likely mid-file while an agent writes.
+async function worktreeRefresh(): Promise<void> {
+	if (view.kind !== "worktree" || view.print === worktreePrint(view.side)) {
+		return;
+	}
+	const { side } = view;
+	const print = worktreePrint(side);
+	const loaded = await CommitView.load({ kind: "worktree", side });
+	if (view.kind !== "worktree" || view.side !== side) {
+		return;
+	}
+	const carry = view.view.carry();
+	view.view.destroy();
+	const cv = CommitView.build(commitHost, { kind: "worktree", side }, loaded);
+	docEl.replaceChildren(cv.root);
+	docEl.scrollTop = 0;
+	cv.carryRestore(carry);
+	view = { kind: "worktree", side, print, view: cv };
+	worktreeRebuilt = Date.now();
+	stackRedraw();
+}
+
 // Leaves the current view (flushing its saves), then decides again on the state as it is after that flush.
 async function leaveAndShow(want: (summary: ReturnType<typeof stackSummary>) => Exclude<ViewDecision, { kind: "keep" }>, reveal: string | undefined): Promise<void> {
 	if (!(await viewLeave())) {
@@ -333,7 +397,7 @@ async function leaveAndShow(want: (summary: ReturnType<typeof stackSummary>) => 
 		blockedFor(state);
 		return;
 	}
-	await show(want(stackSummary(state)), reveal);
+	await show(want(stackSummary(state, worktree)), reveal);
 }
 
 function followed(summary: ReturnType<typeof stackSummary>): Exclude<ViewDecision, { kind: "keep" }> {
@@ -352,9 +416,18 @@ async function refresh(): Promise<void> {
 		}
 		return;
 	}
-	const decision = viewDecide(stackSummary(state), viewShown(), selected);
+	const shown = viewShown();
+	const decision = viewDecide(stackSummary(state, worktree), shown, selected);
 	if (decision.kind !== "keep") {
-		await leaveAndShow(followed, undefined);
+		// Decided again once the view is left and its saves flushed, still from the view that was shown: an emptied uncommitted-changes view moves on to the newest commit, not back to the last selected one.
+		await leaveAndShow((summary) => {
+			const again = viewDecide(summary, shown, selected);
+			if (again.kind !== "keep") {
+				return again;
+			}
+			// The side refilled between the poll and this read: show it again.
+			return shown.kind === "worktree" ? { kind: "worktree", side: shown.side } : followed(summary);
+		}, undefined);
 		return;
 	}
 	// Same view: only the surroundings changed (often just our own save), so the editors are left alone.
@@ -743,12 +816,23 @@ window.suonetarShell.onApplyProgress((progress) => {
 	}
 });
 
+// Steps through the commits and then the uncommitted changes, as the stack lists them.
 function commitStep(dir: 1 | -1): void {
 	void op("Selecting", async () => {
-		const commits = ready?.stack.commits ?? [];
-		const index = commits.findIndex((c) => c.oid === selected?.oid);
-		const target = index === -1 ? undefined : commits[index + dir];
-		if (target !== undefined) {
+		const items: ({ readonly oid: string } | { readonly side: WorktreeSide })[] = [
+			...(ready?.stack.commits ?? []).map((c) => ({ oid: c.oid })),
+			...(["staged", "unstaged"] as const).filter((side) => worktree[side] > 0).map((side) => ({ side })),
+		];
+		const shownSide = view.kind === "worktree" ? view.side : undefined;
+		const index = items.findIndex((item) => ("side" in item ? item.side === shownSide : shownSide === undefined && item.oid === selected?.oid));
+		// Nothing current (an empty stack): start from the end being stepped towards.
+		const target = index === -1 ? items[dir === 1 ? 0 : items.length - 1] : items[index + dir];
+		if (target === undefined) {
+			return;
+		}
+		if ("side" in target) {
+			await worktreeSelect(target.side);
+		} else {
 			await commitSelect(target.oid);
 		}
 	});
@@ -767,7 +851,7 @@ window.addEventListener(
 			return;
 		}
 		const page = event.key === "PageUp" ? -1 : event.key === "PageDown" ? 1 : 0;
-		const docView = view.kind === "commit" || view.kind === "draft" ? view.view : undefined;
+		const docView = view.kind === "commit" || view.kind === "draft" || view.kind === "worktree" ? view.view : undefined;
 		if (page !== 0 && event.altKey && !event.ctrlKey && !event.shiftKey) {
 			commitStep(page);
 		} else if (page !== 0 && event.altKey && event.ctrlKey) {
@@ -838,6 +922,25 @@ async function poll(): Promise<void> {
 			const generation = await call(api.generation());
 			if (generation !== generationSeen) {
 				await op("Refreshing", refresh);
+			}
+			// The working tree moves without any ref moving; only its rows and an open view of it follow, never the rest of the state.
+			const status = await call(api.worktreeStatus());
+			const countsChanged = status.staged !== worktree.staged || status.unstaged !== worktree.unstaged || status.conflicted !== worktree.conflicted;
+			worktree = status;
+			const printStale = view.kind === "worktree" && view.print !== worktreePrint(view.side);
+			const holding = view.kind === "worktree" && view.view.holding();
+			switch (worktreePollAction(countsChanged, worktree, viewShown(), printStale, Date.now() - worktreeRebuilt, holding)) {
+				case "redraw":
+					stackRedraw();
+					break;
+				case "redecide":
+					await op("Refreshing", refresh);
+					break;
+				case "rebuild":
+					await op("Refreshing", worktreeRefresh);
+					break;
+				case "none":
+					break;
 			}
 		}
 	} catch (err) {

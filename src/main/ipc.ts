@@ -109,6 +109,8 @@ export type SessionApi = Pick<
 	| "preview"
 	| "apply"
 	| "undo"
+	| "worktreeStatus"
+	| "worktreeDocument"
 	| "indentation"
 	| "mergetoolName"
 	| "mergetool"
@@ -176,6 +178,14 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 			throw new ErrorIpcArgument("argument 2 is not exact or edits");
 		}
 		return session.undo(argOid(a, 0), argOid(a, 1), kind);
+	});
+	handle("worktreeStatus", () => session.worktreeStatus());
+	handle("worktreeDocument", (a) => {
+		const side = a[0];
+		if (side !== "staged" && side !== "unstaged") {
+			throw new ErrorIpcArgument("argument 0 is not staged or unstaged");
+		}
+		return session.worktreeDocument(side);
 	});
 	handle("indentation", (a) => session.indentation(argOid(a, 0), argString(a, 1)));
 	handle("mergetoolName", () => session.mergetoolName());
