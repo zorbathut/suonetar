@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { fileReaderDisk, hookRunnerSpawn } from "./git.ts";
+import { envInherited, fileReaderDisk, hookRunnerSpawn } from "./git.ts";
 
 function alive(pid: number): boolean {
 	try {
@@ -139,6 +139,29 @@ describe("hook runner", () => {
 		await new Promise((r) => setTimeout(r, 300));
 		expect(alive(tool)).toBe(true);
 		process.kill(tool);
+	});
+});
+
+describe("envInherited", () => {
+	test("under an AppImage, drops what its launcher added and keeps the rest", () => {
+		const env = envInherited({
+			APPIMAGE: "/home/me/Suonetar.AppImage",
+			APPDIR: "/tmp/.mount_SuonXY",
+			ARGV0: "Suonetar.AppImage",
+			OWD: "/home/me",
+			PATH: "/tmp/.mount_SuonXY:/tmp/.mount_SuonXY/usr/sbin:/usr/bin:/bin",
+			LD_LIBRARY_PATH: "/tmp/.mount_SuonXY/usr/lib",
+			XDG_DATA_DIRS: "/tmp/.mount_SuonXY/usr/share/:/usr/local/share:/usr/share",
+			GSETTINGS_SCHEMA_DIR: "/tmp/.mount_SuonXY/usr/share/glib-2.0/schemas:/home/me/schemas",
+			GIT_DIR: "/elsewhere/.git",
+			HOME: "/home/me",
+		});
+		expect(env).toEqual({ PATH: "/usr/bin:/bin", XDG_DATA_DIRS: "/usr/local/share:/usr/share", GSETTINGS_SCHEMA_DIR: "/home/me/schemas", HOME: "/home/me" });
+	});
+
+	test("outside an AppImage, passes everything on but repository redirections", () => {
+		const parent = { APPDIR: "/opt/x", PATH: "/opt/x:/usr/bin", LD_LIBRARY_PATH: "", GIT_WORK_TREE: "/w", HOME: "/home/me" };
+		expect(envInherited(parent)).toEqual({ APPDIR: "/opt/x", PATH: "/opt/x:/usr/bin", LD_LIBRARY_PATH: "", HOME: "/home/me" });
 	});
 });
 

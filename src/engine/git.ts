@@ -45,14 +45,38 @@ const ENV_FIXED = { LANG: "C", LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINA
 // Inherited from a parent git process (a hook, say), these would silently redirect every command to some other repository or index.
 const ENV_STRIPPED = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX"];
 
-export function envGit(extra: Readonly<Record<string, string>> | undefined): Record<string, string> {
+// What an AppImage's launcher sets for the app alone. Passed on, git, hooks and merge tools would run with the libraries and data bundled into Suonetar's AppImage.
+const ENV_APPIMAGE = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+const ENV_APPIMAGE_LISTS = ["PATH", "LD_LIBRARY_PATH", "XDG_DATA_DIRS", "GSETTINGS_SCHEMA_DIR"];
+
+// The parent's environment for a child process: without what would redirect git to another repository, and, under an AppImage, without what its launcher added.
+export function envInherited(parent: Readonly<Record<string, string | undefined>>): Record<string, string> {
+	const appDir = parent.APPIMAGE !== undefined && parent.APPDIR !== undefined && parent.APPDIR !== "" ? parent.APPDIR : undefined;
+	const inside = (value: string) => appDir !== undefined && (value === appDir || value.startsWith(`${appDir}/`));
 	const env: Record<string, string> = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined && !ENV_STRIPPED.includes(key)) {
-			env[key] = value;
+	for (const [key, value] of Object.entries(parent)) {
+		if (value === undefined || ENV_STRIPPED.includes(key)) {
+			continue;
 		}
+		if (appDir !== undefined) {
+			if (ENV_APPIMAGE.includes(key)) {
+				continue;
+			}
+			if (ENV_APPIMAGE_LISTS.includes(key)) {
+				const kept = value.split(delimiter).filter((entry) => !inside(entry));
+				if (kept.length > 0) {
+					env[key] = kept.join(delimiter);
+				}
+				continue;
+			}
+		}
+		env[key] = value;
 	}
-	return { ...env, ...ENV_FIXED, ...extra };
+	return env;
+}
+
+export function envGit(extra: Readonly<Record<string, string>> | undefined): Record<string, string> {
+	return { ...envInherited(process.env), ...ENV_FIXED, ...extra };
 }
 
 export function gitRunnerSpawn(): GitRunner {
@@ -83,8 +107,8 @@ export function gitRunnerSpawn(): GitRunner {
 // The environment a hook sees: the user's, without variables that would redirect git to another repository and without what `npm run` injects (its package's `node_modules/.bin` on PATH would hand the hook Suonetar's own tools).
 function envHook(extra: Readonly<Record<string, string>>): Record<string, string> {
 	const env: Record<string, string> = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined && !ENV_STRIPPED.includes(key) && !key.startsWith("npm_") && key !== "INIT_CWD") {
+	for (const [key, value] of Object.entries(envInherited(process.env))) {
+		if (!key.startsWith("npm_") && key !== "INIT_CWD") {
 			env[key] = value;
 		}
 	}
