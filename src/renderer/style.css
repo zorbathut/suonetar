@@ -497,6 +497,51 @@ section.record {
 	margin: 4px 0;
 }
 
+.image-compare {
+	padding: 8px 10px;
+}
+
+.image-panes {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 16px;
+	align-items: flex-start;
+}
+
+.image-pane {
+	flex: 1 1 280px;
+	min-width: 0;
+}
+
+.image-caption {
+	color: var(--fg-dim);
+	font-size: 12px;
+	margin-bottom: 4px;
+}
+
+/* A checkerboard behind the image, so transparent areas show as such. */
+.image-checker {
+	display: inline-block;
+	max-width: 100%;
+	background: repeating-conic-gradient(var(--bg-alt) 0 25%, var(--bg-hover) 0 50%) 0 0 / 16px 16px;
+	border: 1px solid var(--border);
+}
+
+.image-checker img {
+	display: block;
+	max-width: 100%;
+	max-height: 600px;
+	object-fit: contain;
+}
+
+.stage-preview .image-checker {
+	margin: 4px 0;
+}
+
+.stage-preview .image-checker img {
+	max-height: 300px;
+}
+
 .modal-backdrop {
 	position: fixed;
 	inset: 0;

@@ -7,6 +7,7 @@ import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
 import { editorCreate } from "./editor.ts";
+import { imageCompare, imagePanes } from "./image.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 
 type Doc = Wire<CommitDocument>;
@@ -222,8 +223,9 @@ export class CommitView {
 		);
 		const body = el("div", { class: "section-body" });
 		const root = el("section", { class: "file" }, header, body);
-		const large = LOCKFILE.test(file.path) || newlines(file.parent) + newlines(file.draft) > LARGE_LINES;
 		const opaque = file.tooLarge || file.binary || (file.draft !== undefined && textDecode(file.draft).kind === "binary");
+		// Collapsing is for long text; an opaque file is shown whole (or as a note) either way.
+		const large = !opaque && (LOCKFILE.test(file.path) || newlines(file.parent) + newlines(file.draft) > LARGE_LINES);
 		const section: Section = {
 			file,
 			root,
@@ -276,7 +278,8 @@ export class CommitView {
 		if (f.tooLarge) {
 			s.body.append(el("div", { class: "note", text: "Too large to show here (over 4 MiB)." }));
 		} else if (s.opaque) {
-			s.body.append(el("div", { class: "note", text: "Binary file; not editable here." }));
+			const panes = imagePanes(f);
+			s.body.append(panes === undefined ? el("div", { class: "note", text: "Binary file; not editable here." }) : imageCompare(panes));
 		} else if (!s.expanded) {
 			s.body.append(el("div", { class: "note clickable", text: "Large or generated file, collapsed. Click the header to show it." }));
 		} else if (docText !== undefined) {

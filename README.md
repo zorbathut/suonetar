@@ -29,7 +29,7 @@ A relative path resolves against the directory npm was run from. `npm run dev --
 git config suonetar.base origin/main
 ```
 
-**Editing.** Each commit shows as one scrolling document: its message, then every changed file as an inline diff against the parent, editable in place. Edits autosave as a *draft* for that commit; clicking between commits loses nothing, and drafts survive closing the window. A draft can be reverted per file, and "Show my edits" diffs it against the commit instead of the parent. Symlinks, submodules, binary files, and files with a `filter=` attribute (LFS, git-crypt) are read-only.
+**Editing.** Each commit shows as one scrolling document: its message, then every changed file as an inline diff against the parent, editable in place. Edits autosave as a *draft* for that commit; clicking between commits loses nothing, and drafts survive closing the window. A draft can be reverted per file, and "Show my edits" diffs it against the commit instead of the parent. Symlinks, submodules, binary files, and files with a `filter=` attribute (LFS, git-crypt) are read-only; images (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) are shown before and after, side by side.
 
 **Apply** publishes every draft at once:
 

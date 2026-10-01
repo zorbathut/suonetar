@@ -8,6 +8,7 @@ import { type TextCodec, textDecode, textEncode, textShow } from "./codec.ts";
 import { type BlockChoice, conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers } from "./conflicts.ts";
 import { ask, button, el } from "./dom.ts";
 import { editorCreate } from "./editor.ts";
+import { imageElement, imageType } from "./image.ts";
 
 export type Report = Wire<ConflictReport>;
 type Record = Report["conflicts"][number];
@@ -409,13 +410,24 @@ export class ResolveView {
 		const details = el("details", { class: "stage-preview" }, el("summary", { text: "show" }));
 		const pre = el("pre", {});
 		details.append(pre);
+		let loaded = false;
 		details.addEventListener("toggle", () => {
-			if (!details.open || pre.textContent !== "") {
+			if (!details.open || loaded) {
 				return;
 			}
+			loaded = true;
 			call(api.blob(stage.oid)).then(
 				(bytes) => {
-					pre.textContent = bytes === undefined ? "(not a file)" : textShow(bytes.subarray(0, 64 * 1024));
+					if (bytes === undefined) {
+						pre.textContent = "(not a file)";
+						return;
+					}
+					const type = stage.mode === "100644" || stage.mode === "100755" ? imageType(bytes) : undefined;
+					if (type === undefined) {
+						pre.textContent = textShow(bytes.subarray(0, 64 * 1024));
+					} else {
+						pre.replaceWith(imageElement(bytes, type, stageLabel(stage.stage)));
+					}
 				},
 				(err: unknown) => {
 					pre.textContent = errorText(err);
