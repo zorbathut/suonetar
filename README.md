@@ -31,6 +31,8 @@ git config suonetar.base origin/main
 
 **Editing.** Each commit shows as one scrolling document: its message, then every changed file as an inline diff against the parent, editable in place. Edits autosave as a *draft* for that commit; clicking between commits loses nothing, and drafts survive closing the window. A draft can be reverted per file, and "Show my edits" diffs it against the commit instead of the parent. Symlinks, submodules, binary files, and files with a `filter=` attribute (LFS, git-crypt) are read-only; images (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) are shown before and after, side by side.
 
+**Indentation** follows `.editorconfig`: Enter and Tab insert what `indent_style` and `indent_size` say, tabs show at `tab_width`, and long lines wrap with their continuation rows two indents past the line's own. The configs come from the commit being shown, plus any above the repository on disk; without any, it is four spaces. An edit to `.editorconfig` applies once the commit is reopened. A tab indent is always one tab wide, so `indent_size` smaller than `tab_width` shows tab-wide levels. A repository path containing `{`, `}`, or `\` defeats the library's section matching, and such a repository gets the default.
+
 **Apply** publishes every draft at once:
 
 1. The whole stack is replayed in memory. If a commit above an edit conflicts with it, nothing is published; the conflict opens in a resolve view (with per-block "keep below / keep this commit / keep both", or **Open in `<merge.tool>`** for your own merge tool), and Apply continues once every conflict is resolved.

@@ -8,8 +8,8 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
 import type { Indentation } from "../engine/editorconfig.ts";
 import type { Wire } from "../shared/api.ts";
-import { editorIndent, editorIndentExtension } from "./indentation.ts";
-import { indentUnitGuess, wrapIndented } from "./wrap-indent.ts";
+import { editorIndentExtension } from "./indentation.ts";
+import { wrapIndented } from "./wrap-indent.ts";
 
 export type EditorSpec = {
 	readonly path: string;
@@ -56,8 +56,7 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 		rectangularSelection(),
 		highlightActiveLine(),
 		editorIndentExtension(spec.indentation),
-		// Guessed from the original when the file is deleted, so its deleted lines still hang by the file's own unit.
-		wrapIndented(indentUnitGuess((spec.doc === "" ? (spec.original ?? "") : spec.doc).split("\n"), editorIndent(spec.indentation).tabSize)),
+		wrapIndented(),
 		highlightSelectionMatches(),
 		search({ top: true }),
 		keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
