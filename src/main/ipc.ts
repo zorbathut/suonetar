@@ -108,6 +108,7 @@ export type SessionApi = Pick<
 	| "resolve"
 	| "preview"
 	| "apply"
+	| "undo"
 	| "applyCancel"
 >;
 
@@ -166,6 +167,13 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 			}
 		}),
 	);
+	handle("undo", (a) => {
+		const kind = a[2];
+		if (kind !== "exact" && kind !== "edits") {
+			throw new ErrorIpcArgument("argument 2 is not exact or edits");
+		}
+		return session.undo(argOid(a, 0), argOid(a, 1), kind);
+	});
 	handle("applyCancel", async () => {
 		session.applyCancel();
 		return undefined;

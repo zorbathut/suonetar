@@ -22,6 +22,7 @@ function byId(id: string): HTMLElement {
 
 const whereEl = byId("where");
 const draftsEl = byId("drafts");
+const undoEl = byId("undo");
 const applyEl = byId("apply");
 const cancelEl = byId("cancel");
 const statusEl = byId("status");
@@ -193,6 +194,7 @@ function stackRedraw(): void {
 }
 
 function topRedraw(): void {
+	undoButtonUpdate();
 	if (ready === undefined) {
 		whereEl.textContent = "";
 		draftsEl.textContent = "";
@@ -205,6 +207,20 @@ function topRedraw(): void {
 	draftsEl.textContent = [edited > 0 ? `${edited} edited` : "", attention > 0 ? `${attention} need a decision` : ""].filter((s) => s !== "").join(" · ");
 }
 
+function undoButtonUpdate(): void {
+	const info = ready?.undo;
+	undoEl.hidden = info === undefined;
+	if (info === undefined || !(undoEl instanceof HTMLButtonElement)) {
+		return;
+	}
+	undoEl.textContent = info.verb === "undo" ? "Undo apply" : "Redo apply";
+	undoEl.disabled = busy || info.kind === "unavailable";
+	undoEl.title =
+		info.kind === "unavailable"
+			? `Not available: ${info.reason}.`
+			: `${info.verb === "undo" ? "Undo" : "Redo"} the last apply (${info.commits} commit${info.commits === 1 ? "" : "s"})${info.kind === "edits" ? ", as edits to review: commits were made on top of it" : ""}.`;
+}
+
 function busySet(value: boolean): void {
 	busy = value;
 	document.body.classList.toggle("busy", value);
@@ -214,6 +230,7 @@ function busySet(value: boolean): void {
 		applyEl.disabled = value;
 	}
 	cancelEl.hidden = !value;
+	undoButtonUpdate();
 }
 
 function bannersUpdate(): void {
@@ -258,7 +275,7 @@ function blockedShow(message: string, details: readonly string[]): void {
 function blockedFor(state: Exclude<SessionState, Ready>): void {
 	if (state.kind === "interrupted") {
 		const intent = state.intent;
-		blockedShow("An apply was interrupted", [
+		blockedShow("An update of the branch was interrupted", [
 			state.reason,
 			`It was moving ${intent.branch} from ${intent.oldTip.slice(0, 10)} to ${intent.newTip.slice(0, 10)} and stopped in phase “${intent.phase}”.`,
 			`Intent file: ${state.intentPath}`,
@@ -490,6 +507,70 @@ async function publishFailureShow(outcome: PublishFailure, what: string): Promis
 	}
 }
 
+// Undoes (or redoes) the branch's last Suonetar move, after confirming what it will do as the state stands once the current view is left.
+async function undoRun(): Promise<void> {
+	if (!(await viewLeave())) {
+		return;
+	}
+	const state = await stateRead();
+	const info = state.kind === "ready" ? state.undo : undefined;
+	if (info === undefined || info.kind === "unavailable") {
+		statusSet(info === undefined ? "There is nothing to undo." : `Not available: ${info.reason}.`, "error");
+		await refresh();
+		return;
+	}
+	const undoing = info.verb === "undo";
+	const n = `${info.commits} commit${info.commits === 1 ? "" : "s"}`;
+	const details =
+		info.kind === "exact"
+			? [
+					undoing
+						? `The branch goes back to exactly the ${n} it had before the last apply. “Redo apply” puts the applied commits back, until the next apply.`
+						: `The branch goes back to the ${n} the undone apply made. “Undo apply” undoes it again.`,
+					info.pushed > 0 ? `${info.pushed} of the commits being replaced ${info.pushed === 1 ? "is" : "are"} already pushed; the remote branch will need a force-push.` : "",
+				]
+			: [
+					"Commits were made on the branch since, so it cannot simply be moved back.",
+					`Instead, edits that restore the ${n} as ${undoing ? "they were before the apply" : "the apply made them"} are prepared on the commits that need them; review them, then Apply. Later commits that build on the change will likely need resolving then.`,
+				];
+	const label = undoing ? "Undo apply" : "Redo apply";
+	const answer = await ask(`${label}?`, details.filter((d) => d !== "").join("\n"), [
+		{ label, value: "go" },
+		{ label: "Cancel", value: "cancel", primary: true },
+	]);
+	if (answer !== "go") {
+		await refresh();
+		return;
+	}
+	const outcome = await call(api.undo(info.old, info.new, info.kind));
+	switch (outcome.kind) {
+		case "published":
+			statusSet(undoing ? "Undone." : "Redone.", "ok");
+			break;
+		case "drafted":
+			statusSet(`Prepared the ${info.verb} as edits on ${outcome.drafts} commit${outcome.drafts === 1 ? "" : "s"}; review them, then Apply.`, "ok");
+			break;
+		case "unavailable":
+			statusSet(`Not ${undoing ? "undone" : "redone"}: ${outcome.reason}.`, "error");
+			break;
+		case "stale":
+			statusSet("The branch changed meanwhile, so nothing was done; check again.", "error");
+			break;
+		case "refused":
+		case "locked":
+		case "moved":
+		case "busy":
+		case "interrupted":
+			await publishFailureShow(outcome, undoing ? "Not undone" : "Not redone");
+			break;
+		default: {
+			const never: never = outcome;
+			throw new Error(`unknown undo result ${String(never)}`);
+		}
+	}
+	await refresh();
+}
+
 async function hookShow(stop: HookStop): Promise<void> {
 	const message = stop.kind === "hook-failed" ? "pre-commit stopped the apply; nothing was changed." : `pre-commit could not be run; nothing was changed: ${stop.message}`;
 	// Leaving the previous hook view would forget the skips this retry was made with.
@@ -633,6 +714,7 @@ applyEl.addEventListener(
 			return applyRun({ kind: "run", skip: [] });
 		}),
 );
+undoEl.addEventListener("click", () => void op("Undo", undoRun));
 // Outside the operation queue, which the running apply holds.
 cancelEl.addEventListener("click", () => {
 	statusSet("Cancelling…", "info");

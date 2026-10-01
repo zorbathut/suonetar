@@ -9,12 +9,13 @@ import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeD
 import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
-import { reflogMessage } from "./undo.ts";
+import { reflogMessage, type UndoInfo, undoAssess, undoDrafts } from "./undo.ts";
 import { WorktreePrivate } from "./worktree-private.ts";
 import { blobWrite, signingWanted } from "./write.ts";
 
 export type SessionState =
-	| { readonly kind: "ready"; readonly stack: Stack; readonly drafts: readonly DraftStatus[] }
+	// `undo` describes undoing the branch's last Suonetar move, when there is one.
+	| { readonly kind: "ready"; readonly stack: Stack; readonly drafts: readonly DraftStatus[]; readonly undo: UndoInfo | undefined }
 	| { readonly kind: "unavailable"; readonly reason: string }
 	| Extract<PublishResult, { kind: "interrupted" }>;
 
@@ -58,6 +59,15 @@ export type ApplyResult =
 			readonly hookChanges: HookChanges;
 			readonly hookless: readonly HookCommit[];
 	  };
+
+export type UndoResult =
+	| Exclude<PublishResult, { kind: "published" }>
+	| { readonly kind: "published"; readonly verb: "undo" | "redo" }
+	// The branch moved since, so the undo was written as drafts, which the user reviews and applies.
+	| { readonly kind: "drafted"; readonly verb: "undo" | "redo"; readonly drafts: number }
+	| { readonly kind: "unavailable"; readonly reason: string }
+	// The branch's last Suonetar move is no longer the one the user confirmed undoing.
+	| { readonly kind: "stale" };
 
 export type DocumentFile = {
 	readonly path: string;
@@ -114,6 +124,11 @@ function mutexFor(repo: Repo): Mutex {
 		mutexes.set(repo.commonDir, mutex);
 	}
 	return mutex;
+}
+
+// Whether this branch has stored drafts; those made on other branches are left out.
+function draftsHere(drafts: readonly DraftStatus[]): boolean {
+	return drafts.some((d) => d.kind !== "elsewhere");
 }
 
 export class Session {
@@ -184,7 +199,8 @@ export class Session {
 			try {
 				const stack = await stackRead(this.repo, this.#cat);
 				const store = await storeRead(this.repo, this.#cat);
-				return { kind: "ready", stack, drafts: await draftsResolve(this.repo, stack, store.drafts) };
+				const drafts = await draftsResolve(this.repo, stack, store.drafts);
+				return { kind: "ready", stack, drafts, undo: await this.#undoInfo(stack, drafts) };
 			} catch (err) {
 				if (err instanceof ErrorNotOnBranch || err instanceof ErrorNoBase) {
 					return { kind: "unavailable", reason: err.message };
@@ -373,6 +389,51 @@ export class Session {
 	// Stops the apply in progress if it has not started publishing; publishing itself is never interrupted. Not serialised, since the apply holds the mutex.
 	applyCancel(): void {
 		this.#applyAbort?.abort();
+	}
+
+	// Undoes the branch's last Suonetar move, which must still be the one from `old` to `newTip`, the user confirmed as `kind`.
+	undo(old: Oid, newTip: Oid, kind: "exact" | "edits"): Promise<UndoResult> {
+		return this.#mutex.run(async () => {
+			const pending = intentCheck(this.repo);
+			if (pending) {
+				return pending;
+			}
+			const stack = await stackRead(this.repo, this.#cat);
+			const store = await storeRead(this.repo, this.#cat);
+			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, store.drafts)));
+			const info = assessed?.info;
+			if (info === undefined || info.kind === "unavailable" || info.old !== old || info.new !== newTip || info.kind !== kind || assessed?.pairing === undefined) {
+				return info?.kind === "unavailable" ? { kind: "unavailable", reason: info.reason } : { kind: "stale" };
+			}
+			if (info.kind === "exact") {
+				const published = await publish(this.repo, stack.branch, info.new, info.old, reflogMessage(info.verb, info.commits, info.new));
+				return published.kind === "published" ? { kind: "published", verb: info.verb } : published;
+			}
+			const drafts = await undoDrafts(this.repo, this.#cat, stack.branch, assessed.pairing);
+			if (drafts.length === 0) {
+				return { kind: "unavailable", reason: "it changed nothing that edits could restore" };
+			}
+			// Drafts on this branch were refused above; one stored for the same commit from another branch must not be overwritten.
+			const taken = drafts.find((d) => store.drafts.has(d.meta.against));
+			if (taken !== undefined) {
+				return { kind: "unavailable", reason: `an edit to “${taken.meta.subject}” made on another branch is stored; adopt or discard it first` };
+			}
+			await this.#storeUpdate(store, (map) => {
+				for (const draft of drafts) {
+					map.set(draft.meta.against, draft);
+				}
+			});
+			return { kind: "drafted", verb: info.verb, drafts: drafts.length };
+		});
+	}
+
+	// Undo as the state shows it. Reading the reflog and pairing commits can fail without the rest of the state being wrong, so a failure is shown on the undo button instead of failing the whole read.
+	async #undoInfo(stack: Stack, drafts: readonly DraftStatus[]): Promise<UndoInfo | undefined> {
+		try {
+			return (await undoAssess(this.repo, this.#cat, stack, draftsHere(drafts)))?.info;
+		} catch (err) {
+			return { kind: "unavailable", verb: "undo", reason: `reading the branch's history failed: ${(err as Error).message}` };
+		}
 	}
 
 	async #apply(hooks: HookChoice, progress: (p: ApplyProgress) => void, signal: AbortSignal): Promise<ApplyResult> {

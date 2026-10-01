@@ -1,5 +1,5 @@
 import type { MergeInputs } from "../engine/replay.ts";
-import type { ApplyProgress, ApplyResult, CommitDocument, HookChoice, PreviewResult, ResolutionChoice, ResolveResult, SessionState } from "../engine/session.ts";
+import type { ApplyProgress, ApplyResult, CommitDocument, HookChoice, PreviewResult, ResolutionChoice, ResolveResult, SessionState, UndoResult } from "../engine/session.ts";
 
 // An engine type as it arrives on the other side of IPC: structured clone turns every Buffer into a plain Uint8Array.
 export type Wire<T> = T extends Uint8Array ? Uint8Array : T extends readonly (infer U)[] ? readonly Wire<U>[] : T extends object ? { readonly [K in keyof T]: Wire<T[K]> } : T;
@@ -26,6 +26,8 @@ export type SuonetarApi = {
 	readonly resolve: (inputs: MergeInputs, key: string, choices: readonly Wire<ResolutionChoice>[]) => Promise<Result<ResolveResult>>;
 	readonly preview: () => Promise<Result<Wire<PreviewResult>>>;
 	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
+	// Undoes the branch's last Suonetar move, as `SessionState`'s `undo` described it.
+	readonly undo: (old: string, newTip: string, kind: "exact" | "edits") => Promise<Result<Wire<UndoResult>>>;
 	// Stops the pre-commit pass of a running apply, which then returns `cancelled`.
 	readonly applyCancel: () => Promise<Result<undefined>>;
 };

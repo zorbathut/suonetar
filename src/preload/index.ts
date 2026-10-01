@@ -18,6 +18,7 @@ const api: SuonetarApi = {
 	resolve: (inputs, key, choices) => ipcRenderer.invoke(apiChannel("resolve"), inputs, key, choices),
 	preview: () => ipcRenderer.invoke(apiChannel("preview")),
 	apply: (hooks) => ipcRenderer.invoke(apiChannel("apply"), hooks),
+	undo: (old, newTip, kind) => ipcRenderer.invoke(apiChannel("undo"), old, newTip, kind),
 	applyCancel: () => ipcRenderer.invoke(apiChannel("applyCancel")),
 };
 

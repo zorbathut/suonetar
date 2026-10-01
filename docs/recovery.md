@@ -54,6 +54,17 @@ If the branch is somewhere else entirely, another process moved it. Suonetar's r
 - Drafts and conflict resolutions live under `refs/suonetar/drafts`, survive `git gc --prune=now`, and the ref has its own reflog, so discarded drafts stay recoverable (`.git/logs/refs/suonetar/drafts` lists every state; `git reflog` does not display them because they are trees, not commits).
 - Every commit Suonetar replaces stays in the branch reflog; Suonetar sets `gc.reflogExpireUnreachable=1.year` in the repository's config so they are kept that long. `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` removes them.
 
+## Undoing by hand
+
+Every branch move Suonetar makes is in the branch reflog with a message naming the tip it moved from: `suonetar: apply 3 commits from <old>`, and likewise `undo` and `redo`. Suonetar's own Undo button reaches only the last of them. To go back further, or if Suonetar is not at hand:
+
+```sh
+git log -g --format='%h %gs' <branch>   # find the entry to go back past
+git reset --keep <old>                   # the oid from that entry's message
+```
+
+`--keep` refuses rather than overwrite uncommitted changes to files the reset touches. Commits made on top since that entry are dropped from the branch by the reset (they stay in the reflog); cherry-pick them back if they are wanted.
+
 ## The private worktree and pre-commit hooks
 
 Apply runs the repository's `pre-commit` hook on every commit it rewrites, before publishing anything. The hook runs in a private worktree at `.git/suonetar/wt`. It shows in `git worktree list` as detached and locked ("suonetar private worktree"). While a pass runs, `.git/suonetar/wt.lock` holds the pid of the Suonetar process using it.
