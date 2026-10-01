@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { gitOk, type HookResult, type Oid, type Repo } from "./git.ts";
 import { mergeTrees } from "./merge.ts";
 import { treeDiffRaw } from "./objects.ts";
@@ -79,7 +79,7 @@ async function hookConfig(repo: Repo, hooksPath: string | undefined, tree: Oid):
 	const absolute = resolve(repo.worktree, hooksPath);
 	const inside = relative(repo.worktree, absolute);
 	if (inside !== "" && !inside.startsWith("..") && !isAbsolute(inside)) {
-		const tracked = await gitOk(repo, ["ls-tree", tree, "--", inside]);
+		const tracked = await gitOk(repo, ["ls-tree", tree, "--", inside.replaceAll(sep, "/")]);
 		if (tracked.length > 0) {
 			return [];
 		}
