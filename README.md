@@ -64,7 +64,10 @@ The repository is re-read every second, and before every operation. When the age
 ```sh
 npm run check   # type-check (engine and renderer separately) and lint
 npm test        # Vitest; the engine tests drive real git
+npm run dist    # package for this platform into dist/: an AppImage on Linux, an installer on Windows
 ```
+
+A packaged build takes the same arguments as `npm run app`: `suonetar-<version>-linux-x86_64.AppImage [<repository> [<base>]]`, or none to start with File › Open Repository….
 
 - `src/engine`: git operations, Node only.
 - `src/main`: the Electron main process, which hosts the engine.

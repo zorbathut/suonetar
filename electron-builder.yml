@@ -1,0 +1,16 @@
+# Packaging for `npm run dist`, which builds for the platform it runs on.
+appId: net.pavlovian.suonetar
+# No productName: the app's name, and with it the Wayland app ID and WM_CLASS that match the window to its icon and launcher, stay "suonetar".
+directories:
+  output: dist
+files:
+  - out/**
+  - resources/icon.png
+artifactName: suonetar-${version}-${os}-${arch}.${ext}
+linux:
+  target: AppImage
+  category: Development
+  icon: resources/icon.png
+win:
+  target: nsis
+  icon: resources/icon.png
