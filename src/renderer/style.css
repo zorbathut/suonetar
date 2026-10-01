@@ -154,6 +154,54 @@ body.busy #body {
 	overflow-y: auto;
 }
 
+/* With the tree shown, the stack gets at most half the sidebar, so a long stack cannot push the tree out of sight. */
+#side:has(> #files:not([hidden])) > #stack {
+	max-height: 50%;
+}
+
+#files {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow-y: auto;
+	border-top: 1px solid var(--border);
+	padding: 4px 0;
+	font-family: ui-monospace, monospace;
+	font-size: 12px;
+}
+
+.tree-row {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+	padding-top: 1px;
+	padding-bottom: 1px;
+	padding-right: 8px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.tree-row:hover {
+	background: var(--bg-hover);
+}
+
+.tree-row.current {
+	background: var(--bg-selected);
+}
+
+.tree-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.tree-dir .tree-name {
+	color: var(--fg-dim);
+}
+
+.tree-toggle {
+	width: 1ch;
+	color: var(--fg-dim);
+}
+
 #doc {
 	flex: 1;
 	overflow-y: auto;
@@ -307,26 +355,6 @@ body.busy #body {
 	margin-left: 12px;
 }
 
-.file-list {
-	list-style: none;
-	padding: 0;
-	margin: 8px 0;
-	columns: 2;
-	font-family: ui-monospace, monospace;
-	font-size: 12px;
-}
-
-.file-list li {
-	cursor: pointer;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.file-list li:hover {
-	color: var(--accent);
-}
-
 section.file {
 	margin: 12px 0;
 	border: 1px solid var(--border);
@@ -375,6 +403,10 @@ section.file {
 .status-M,
 .status-T {
 	color: var(--accent);
+}
+
+.status-same {
+	color: var(--fg-dim);
 }
 
 .save-state {

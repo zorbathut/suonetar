@@ -28,6 +28,8 @@ const cancelEl = byId("cancel");
 const statusEl = byId("status");
 const sideEl = byId("side");
 const stackEl = byId("stack");
+// The changed-files pane: commit views fill it; every other view hides it, giving the stack the whole sidebar.
+const filesEl = byId("files");
 const docEl = byId("doc");
 
 type View =
@@ -178,7 +180,7 @@ async function stateRead(): Promise<SessionState> {
 	return state;
 }
 
-const commitHost: CommitViewHost = { autosave, scroller: docEl, op, reload: commitReload };
+const commitHost: CommitViewHost = { autosave, scroller: docEl, op, reload: commitReload, files: filesEl, collapsed: new Set() };
 
 function stackRedraw(): void {
 	if (ready === undefined) {
@@ -269,6 +271,7 @@ function bannersUpdate(): void {
 }
 
 function blockedShow(message: string, details: readonly string[]): void {
+	filesEl.hidden = true;
 	docEl.replaceChildren(el("div", { class: "blocked" }, el("h1", { text: message }), ...details.map((d) => el("p", { text: d }))));
 	view = { kind: "blocked" };
 }
@@ -307,6 +310,8 @@ async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: s
 		throw new Error(`commit ${decision.oid} is not in the stack`);
 	}
 	selected = { oid: commit.oid, authorLine: commit.authorLine, subject: commit.subject, index };
+	// Shown before the stack scrolls its selection into view, since showing it shrinks the stack pane.
+	filesEl.hidden = false;
 	stackRedraw();
 	const cv = await CommitView.create(commitHost, { kind: "commit", oid: commit.oid, readOnly: decision.readOnly ? "Read-only until the waiting edit is decided on." : undefined });
 	docEl.replaceChildren(cv.root);
@@ -435,6 +440,7 @@ async function resolveShow(conflict: Report): Promise<void> {
 		return;
 	}
 	const rv = await ResolveView.create(resolveHost, conflict);
+	filesEl.hidden = true;
 	docEl.replaceChildren(rv.root);
 	docEl.scrollTop = 0;
 	view = { kind: "resolve", view: rv };
@@ -588,6 +594,7 @@ async function hookShow(stop: HookStop): Promise<void> {
 		return;
 	}
 	hookSkips = skips;
+	filesEl.hidden = true;
 	docEl.replaceChildren(hookViewCreate(hookHost, stop, hookSkips));
 	docEl.scrollTop = 0;
 	view = { kind: "hook", stop };

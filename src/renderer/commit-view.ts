@@ -7,6 +7,8 @@ import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
 import { editorCreate } from "./editor.ts";
+import { statusClass, statusLabel } from "./file-status.ts";
+import { fileTree, fileTreeHighlight, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 
@@ -27,6 +29,10 @@ export type CommitViewHost = {
 	readonly op: (what: string, fn: () => Promise<void>) => Promise<void>;
 	// Replaces this view with a fresh one read from disk, scrolled to `path`; called with every save flushed.
 	readonly reload: (path: string) => Promise<void>;
+	// The sidebar pane the view draws its changed-files tree into while it exists.
+	readonly files: HTMLElement;
+	// Collapsed directories in that tree, by path; kept by the host so they survive switching commits.
+	readonly collapsed: Set<string>;
 };
 
 type Section = {
@@ -69,25 +75,6 @@ function newlines(bytes: Uint8Array | undefined): number {
 	return count;
 }
 
-function statusLabel(status: File["status"]): string {
-	switch (status) {
-		case "A":
-			return "added";
-		case "M":
-			return "modified";
-		case "D":
-			return "deleted";
-		case "T":
-			return "type changed";
-		case "=":
-			return "unchanged by this commit";
-		default: {
-			const never: never = status;
-			throw new Error(`unknown status ${String(never)}`);
-		}
-	}
-}
-
 // One commit as a single scrolling document: its message, then every changed file as an inline diff against the parent, editable in place.
 export class CommitView {
 	readonly root: HTMLElement;
@@ -98,6 +85,17 @@ export class CommitView {
 	readonly #observer: IntersectionObserver;
 	readonly #doc: Doc;
 	#messageState: HTMLElement | undefined;
+	readonly #tree: readonly TreeNode[];
+	#destroyed = false;
+	#highlightFrame: number | undefined;
+	readonly #highlightSchedule = () => {
+		if (this.#highlightFrame === undefined) {
+			this.#highlightFrame = requestAnimationFrame(() => {
+				this.#highlightFrame = undefined;
+				this.#highlight();
+			});
+		}
+	};
 
 	private constructor(host: CommitViewHost, source: CommitViewSource, doc: Doc) {
 		this.#host = host;
@@ -106,7 +104,13 @@ export class CommitView {
 		this.#banners = el("div", { class: "banners" });
 		this.root = el("div", { class: "commit-view" }, this.#banners);
 		this.#observer = new IntersectionObserver((entries) => this.#onVisible(entries), { root: host.scroller, rootMargin: "1500px 0px" });
+		this.#tree = fileTree(doc.files);
 		this.#render();
+		this.#treeRender();
+		host.files.hidden = false;
+		host.scroller.addEventListener("scroll", this.#highlightSchedule, { passive: true });
+		this.root.addEventListener("focusin", this.#highlightSchedule);
+		this.#highlightSchedule();
 	}
 
 	static async create(host: CommitViewHost, source: CommitViewSource): Promise<CommitView> {
@@ -128,6 +132,14 @@ export class CommitView {
 
 	// Callers flush pending saves first. A save still pending reads its destroyed editor's final text, so even then nothing is lost.
 	destroy(): void {
+		this.#destroyed = true;
+		this.#host.scroller.removeEventListener("scroll", this.#highlightSchedule);
+		this.root.removeEventListener("focusin", this.#highlightSchedule);
+		if (this.#highlightFrame !== undefined) {
+			cancelAnimationFrame(this.#highlightFrame);
+		}
+		// Emptied but left shown: the next commit view fills it, and hiding it in between would resize the stack pane under its own scrolling. Views without files hide it.
+		this.#host.files.replaceChildren();
 		this.#observer.disconnect();
 		for (const s of this.#sections) {
 			s.editor?.destroy();
@@ -154,12 +166,11 @@ export class CommitView {
 	#render(): void {
 		const doc = this.#doc;
 		const title = el("h1", { class: "commit-title" }, el("span", { class: "oid", text: doc.oid.slice(0, 10) }), " ", doc.subject);
-		const list = el("ul", { class: "file-list" });
 		this.root.append(title);
 		if (this.#source.kind === "commit" && this.#source.readOnly !== undefined) {
 			this.root.append(el("div", { class: "note", text: this.#source.readOnly }));
 		}
-		this.root.append(this.#messageRender(), list);
+		this.root.append(this.#messageRender());
 		if (doc.files.length === 0) {
 			this.root.append(el("div", { class: "note", text: "No files changed." }));
 		}
@@ -167,9 +178,28 @@ export class CommitView {
 			const section = this.#sectionCreate(file);
 			this.#sections.push(section);
 			this.root.append(section.root);
-			list.append(el("li", { onclick: () => this.#sectionShow(section, true) }, el("span", { class: `status status-${file.status}`, text: file.status }), " ", file.path));
 			this.#observer.observe(section.body);
 		}
+	}
+
+	#treeRender(): void {
+		fileTreeRender(this.#host.files, this.#tree, this.#host.collapsed, {
+			// Queued like other navigation; by its turn this view may have been replaced, and then the click is moot.
+			reveal: (path) =>
+				void this.#host.op("Showing the file", async () => {
+					const section = this.#sections.find((s) => s.file.path === path);
+					if (!this.#destroyed && section !== undefined) {
+						this.#sectionShow(section, true);
+					}
+				}),
+			toggled: () => this.#highlight(),
+		});
+	}
+
+	// Marks the file the reader is at in the tree, keeping its row in sight.
+	#highlight(): void {
+		const moved = fileTreeHighlight(this.#host.files, this.#sections[this.#sectionCurrent()]?.file.path);
+		moved?.scrollIntoView({ block: "nearest" });
 	}
 
 	#messageRender(): HTMLElement {
@@ -215,7 +245,7 @@ export class CommitView {
 		const header = el(
 			"div",
 			{ class: "section-header" },
-			el("span", { class: `status status-${file.status}`, text: file.status, title: statusLabel(file.status) }),
+			el("span", { class: statusClass(file.status), text: file.status, title: statusLabel(file.status) }),
 			el("span", { class: "path", text: file.path }),
 			badges,
 			saveState,
@@ -419,16 +449,17 @@ export class CommitView {
 		}
 	}
 
-	// The section holding focus, else the first one reaching into the viewport.
+	// The section the reader is at (`sectionCurrentForView`); the tree marks it, and file and change navigation start from it.
 	#sectionCurrent(): number {
+		const view = this.#host.scroller.getBoundingClientRect();
 		const active = document.activeElement;
 		const focused = this.#sections.findIndex((s) => active !== null && s.root.contains(active));
-		if (focused !== -1) {
-			return focused;
-		}
-		const top = this.#host.scroller.getBoundingClientRect().top;
-		const visible = this.#sections.findIndex((s) => s.root.getBoundingClientRect().bottom > top + 1);
-		return visible === -1 ? 0 : visible;
+		return sectionCurrentForView(
+			this.#sections.map((s) => s.root.getBoundingClientRect()),
+			focused,
+			view.top,
+			view.bottom,
+		);
 	}
 
 	fileGo(dir: 1 | -1): void {
