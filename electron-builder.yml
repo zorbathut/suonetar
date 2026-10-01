@@ -8,7 +8,8 @@ files:
   - resources/icon.png
 artifactName: suonetar-${version}-${os}-${arch}.${ext}
 linux:
-  target: AppImage
+  # The AppImage runs as one file; the tarball is for those who would rather unpack it themselves.
+  target: [AppImage, tar.gz]
   category: Development
   icon: resources/icon.png
 win:

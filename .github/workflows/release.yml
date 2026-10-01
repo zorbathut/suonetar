@@ -47,6 +47,7 @@ jobs:
           if-no-files-found: error
           path: |
             dist/*.AppImage
+            dist/*.tar.gz
             dist/suonetar-*-win-*.exe
             !dist/*__uninstaller.exe
 

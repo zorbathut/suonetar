@@ -66,7 +66,7 @@ The repository is re-read every second, and before every operation. When the age
 ```sh
 npm run check   # type-check (engine and renderer separately) and lint
 npm test        # Vitest; the engine tests drive real git
-npm run dist    # package for this platform into dist/: an AppImage on Linux, an installer on Windows
+npm run dist    # package for this platform into dist/: an AppImage and a tarball on Linux, an installer on Windows
 ```
 
 A packaged build takes the same arguments as `npm run app`: `suonetar-<version>-linux-x86_64.AppImage [<repository> [<base>]]`, or none to start with File › Open Repository…. Pushing a `v*` tag builds both packages on GitHub Actions, once the tests pass, and publishes them as a release; a tag with a suffix such as `v1.2.0-rc1` is marked as a prerelease.
