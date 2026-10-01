@@ -17,7 +17,7 @@ function windowCreate(repoPath: string): BrowserWindow {
 	const win = new BrowserWindow({
 		width: 1600,
 		height: 1000,
-		title: `suonetar — ${repoPath}`,
+		title: `Suonetar — ${repoPath}`,
 		backgroundColor: "#1e1e1e",
 		webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
 	});
@@ -94,6 +94,7 @@ function windowCreate(repoPath: string): BrowserWindow {
 		// Asked again while the page has not answered: it may be hung, so offer to close regardless.
 		const choice = dialog.showMessageBoxSync(win, {
 			type: "warning",
+			title: "Suonetar",
 			message: "The window has not finished saving.",
 			detail: "Edits not yet saved will be lost if it closes now.",
 			buttons: ["Keep waiting", "Close anyway"],
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
 	try {
 		session = await Session.open(repoPath);
 	} catch (err) {
-		dialog.showErrorBox("suonetar", `Cannot open ${repoPath} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`);
+		dialog.showErrorBox("Suonetar", `Cannot open ${repoPath} as a git repository:\n\n${err instanceof Error ? err.message : String(err)}`);
 		app.quit();
 		return;
 	}
