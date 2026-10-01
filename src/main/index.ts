@@ -23,6 +23,9 @@ function windowCreate(repoPath: string): BrowserWindow {
 	});
 	const contents = win.webContents;
 
+	// The page's <title> would otherwise replace this one, which names the repository.
+	win.on("page-title-updated", (event) => event.preventDefault());
+
 	// Nothing may navigate the window away from the app (a dropped file, a clicked link): unsaved edits live in the page.
 	contents.on("will-navigate", (event) => event.preventDefault());
 	contents.setWindowOpenHandler(() => ({ action: "deny" }));
