@@ -13,6 +13,7 @@ export type ViewShown =
 	| { readonly kind: "none" }
 	| { readonly kind: "blocked" }
 	| { readonly kind: "resolve" }
+	| { readonly kind: "hook" }
 	| { readonly kind: "draft"; readonly against: string }
 	| { readonly kind: "commit"; readonly oid: string; readonly readOnly: boolean };
 
@@ -30,6 +31,7 @@ export function viewDecide(summary: StackSummary, shown: ViewShown, selected: (C
 	const followed = () => commitAt(summary, selected === undefined ? 0 : reselect(selected, summary.commits));
 	switch (shown.kind) {
 		case "resolve":
+		case "hook":
 			return { kind: "keep" };
 		case "draft":
 			return summary.drafts.has(shown.against) ? { kind: "keep" } : followed();

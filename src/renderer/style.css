@@ -260,6 +260,24 @@ body.busy #body {
 	padding: 0 16px 50vh;
 }
 
+.hook-view {
+	padding: 0 16px 24px;
+	max-width: 1100px;
+}
+
+.hook-output {
+	font:
+		12px / 1.45 ui-monospace,
+		monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	max-height: 60vh;
+	overflow: auto;
+}
+
 .commit-title {
 	font-size: 16px;
 	margin: 12px 0 8px;

@@ -1,5 +1,5 @@
 import type { MergeInputs } from "../engine/replay.ts";
-import type { ApplyResult, CommitDocument, PreviewResult, ResolutionChoice, ResolveResult, SessionState } from "../engine/session.ts";
+import type { ApplyProgress, ApplyResult, CommitDocument, HookChoice, PreviewResult, ResolutionChoice, ResolveResult, SessionState } from "../engine/session.ts";
 
 // An engine type as it arrives on the other side of IPC: structured clone turns every Buffer into a plain Uint8Array.
 export type Wire<T> = T extends Uint8Array ? Uint8Array : T extends readonly (infer U)[] ? readonly Wire<U>[] : T extends object ? { readonly [K in keyof T]: Wire<T[K]> } : T;
@@ -25,14 +25,20 @@ export type SuonetarApi = {
 	readonly draftAdopt: (against: string) => Promise<Result<undefined>>;
 	readonly resolve: (inputs: MergeInputs, key: string, choices: readonly Wire<ResolutionChoice>[]) => Promise<Result<ResolveResult>>;
 	readonly preview: () => Promise<Result<Wire<PreviewResult>>>;
-	readonly apply: () => Promise<Result<Wire<ApplyResult>>>;
+	readonly apply: (hooks: HookChoice) => Promise<Result<Wire<ApplyResult>>>;
+	// Stops the pre-commit pass of a running apply, which then returns `cancelled`.
+	readonly applyCancel: () => Promise<Result<undefined>>;
 };
 
 // Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.
 export type SuonetarShell = {
 	// The handler resolves to true when the window may close.
 	readonly onCloseRequest: (handler: () => Promise<boolean>) => void;
+	// Progress of the apply this page started.
+	readonly onApplyProgress: (handler: (progress: ApplyProgress) => void) => void;
 };
+
+export const APPLY_PROGRESS_CHANNEL = "suonetar:apply-progress";
 
 export function apiChannel(name: keyof SuonetarApi): string {
 	return `suonetar:${name}`;

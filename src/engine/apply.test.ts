@@ -40,7 +40,7 @@ describe("apply", () => {
 
 	test("publishes: moves the branch, updates files and index, logs it, and clears the draft", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("rev-parse", "HEAD")).not.toBe(c2);
 		expect(fx.git("show", "HEAD~1:a.txt")).toBe(edited.trimEnd());
 		expect(disk("a.txt")).toBe(edited);
@@ -55,7 +55,7 @@ describe("apply", () => {
 	test("refuses when an uncommitted edit touches an affected file, changing nothing", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		fx.write("a.txt", "claude's work in progress\n");
-		const result = await session.apply();
+		const result = await session.apply({ kind: "run", skip: [] }, () => undefined);
 		expect(result.kind).toBe("refused");
 		expect(fx.git("rev-parse", "HEAD")).toBe(c2);
 		expect(disk("a.txt")).toBe("claude's work in progress\n");
@@ -69,7 +69,7 @@ describe("apply", () => {
 		fx.write("new.txt", "staged work\n");
 		fx.git("add", "new.txt");
 		fx.write("b.txt", disk("b.txt"));
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(disk("c.txt")).toBe("unstaged work\n");
 		expect(fx.git("status", "--porcelain").split("\n").sort()).toEqual([" M c.txt", "A  new.txt"]);
 	});
@@ -79,20 +79,20 @@ describe("apply", () => {
 		const top = fx.git("rev-parse", "HEAD");
 		fx.write("gen.txt", "precious local output\n");
 		await session.draftSetFile(top, "gen.txt", Buffer.from("now tracked\n"));
-		expect((await session.apply()).kind).toBe("refused");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(disk("gen.txt")).toBe("precious local output\n");
 
 		await session.draftDiscard(top);
 		fx.write("gendir", "an ignored file where a directory must go\n");
 		await session.draftSetFile(top, "gendir/x.txt", Buffer.from("x\n"));
-		expect((await session.apply()).kind).toBe("refused");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(disk("gendir")).toBe("an ignored file where a directory must go\n");
 	});
 
 	test("reports a held index.lock with its age", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		writeFileSync(join(fx.dir, ".git", "index.lock"), "");
-		const result = await session.apply();
+		const result = await session.apply({ kind: "run", skip: [] }, () => undefined);
 		expect(result.kind).toBe("locked");
 		expect(existsSync(join(fx.dir, ".git", "index.lock"))).toBe(true);
 		expect(existsSync(join(fx.dir, ".git", "suonetar", "intent.json"))).toBe(false);
@@ -101,7 +101,7 @@ describe("apply", () => {
 	test("refuses while a rebase is in progress", async () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		mkdirSync(join(fx.dir, ".git", "rebase-merge"));
-		expect((await session.apply()).kind).toBe("refused");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(fx.git("rev-parse", "HEAD")).toBe(c2);
 	});
 
@@ -109,7 +109,7 @@ describe("apply", () => {
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		fx.git("worktree", "add", "-q", "--force", join(fx.dir, "..", `${fx.dir.split("/").at(-1)}-wt`), "feature");
 		try {
-			expect((await session.apply()).kind).toBe("refused");
+			expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		} finally {
 			fx.git("worktree", "remove", "--force", join(fx.dir, "..", `${fx.dir.split("/").at(-1)}-wt`));
 		}
@@ -122,7 +122,7 @@ describe("apply", () => {
 			claude = fx.gitTry("commit", "-qam", "claude");
 		});
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		expect(await s.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await s.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(claude.code).not.toBe(0);
 		expect(claude.out).toContain("index.lock");
 		expect(disk("c.txt")).toBe("claude edit\n");
@@ -134,7 +134,7 @@ describe("apply", () => {
 			fx.git("reset", "-q", "--soft", "HEAD~1");
 		});
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		const result = await s.apply();
+		const result = await s.apply({ kind: "run", skip: [] }, () => undefined);
 		expect(result).toMatchObject({ kind: "moved", unreverted: [] });
 		expect(fx.git("rev-parse", "HEAD")).toBe(c1);
 		expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
@@ -149,7 +149,7 @@ describe("apply", () => {
 		});
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		await s.draftSetFile(c2, "b.txt", Buffer.from("suonetar b\n"));
-		const result = await s.apply();
+		const result = await s.apply({ kind: "run", skip: [] }, () => undefined);
 		expect(result).toMatchObject({ kind: "moved", unreverted: ["a.txt"] });
 		expect(disk("a.txt")).toBe("claude rewrote this\n");
 		expect(disk("b.txt")).toBe(lineSet(lines("b"), 2, "c2"));
@@ -161,7 +161,7 @@ describe("apply", () => {
 			fx.git("switch", "-q", "-c", "backup");
 		});
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		const result = await s.apply();
+		const result = await s.apply({ kind: "run", skip: [] }, () => undefined);
 		expect(result.kind).toBe("moved");
 		expect(fx.git("rev-parse", "feature")).toBe(c2);
 		expect(fx.git("rev-parse", "backup")).toBe(c2);
@@ -178,7 +178,7 @@ describe("apply", () => {
 		intentWrite("worktree-updated");
 		writeFileSync(join(fx.dir, ".git", "index.lock"), "");
 		expect((await session.state()).kind).toBe("interrupted");
-		expect((await session.apply()).kind).toBe("interrupted");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("interrupted");
 		rmSync(join(fx.dir, ".git", "index.lock"));
 		expect((await session.state()).kind).toBe("interrupted");
 	});
@@ -193,7 +193,7 @@ describe("apply", () => {
 		intentWrite("worktree-updated", process.ppid);
 		expect((await session.state()).kind).toBe("ready");
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		expect((await session.apply()).kind).toBe("busy");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("busy");
 	});
 
 	test("a draft changed by someone else during the apply is kept, not cleared", async () => {
@@ -211,7 +211,7 @@ describe("apply", () => {
 			}
 		});
 		await s.draftSetFile(c2, "b.txt", Buffer.from("first edit\n"));
-		expect((await s.apply()).kind).toBe("published");
+		expect((await s.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("published");
 		const state = await s.state();
 		expect(state.kind === "ready" && state.drafts.length).toBe(1);
 	});
@@ -222,12 +222,12 @@ describe("apply", () => {
 		mkdirSync(join(fx.dir, "build"));
 		fx.write("build/precious.o", "object code\n");
 		await session.draftSetFile(top, "build", Buffer.from("now a file\n"));
-		expect((await session.apply()).kind).toBe("refused");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(disk("build/precious.o")).toBe("object code\n");
 		await session.draftDiscard(top);
 		symlinkSync("a.txt", join(fx.dir, "lnk"));
 		await session.draftSetFile(top, "lnk", Buffer.from("now a file\n"));
-		expect((await session.apply()).kind).toBe("refused");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("refused");
 		expect(lstatSync(join(fx.dir, "lnk")).isSymbolicLink()).toBe(true);
 	});
 
@@ -240,7 +240,7 @@ describe("apply", () => {
 		await session.draftSetFile(c3, "ro/new.txt", Buffer.from("cannot be written\n"));
 		chmodSync(join(fx.dir, "ro"), 0o555);
 		try {
-			const result = await session.apply();
+			const result = await session.apply({ kind: "run", skip: [] }, () => undefined);
 			expect(result.kind).toBe("refused");
 			expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
 			expect(fx.git("status", "--porcelain")).toBe("");
@@ -265,7 +265,7 @@ describe("apply", () => {
 		session = await Session.openRepo(failing);
 		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
 		calls = 0;
-		await expect(session.apply()).rejects.toThrow("EAGAIN");
+		await expect(session.apply({ kind: "run", skip: [] }, () => undefined)).rejects.toThrow("EAGAIN");
 		expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
 		expect(fx.git("rev-parse", "HEAD")).toBe(c2);
 		expect(fx.git("status", "--porcelain")).toBe("");
@@ -281,7 +281,7 @@ describe("apply", () => {
 	test("a lock taken over after the last ownership check leaves everything for recovery", async () => {
 		const s = await sessionWith(beforeRefTransaction, lockSteal);
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		expect((await s.apply()).kind).toBe("interrupted");
+		expect((await s.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("interrupted");
 		expect(readFileSync(join(fx.dir, ".git", "index.lock"), "utf8")).toBe("someone else's");
 		expect(existsSync(join(fx.dir, ".git", "suonetar", "index.private"))).toBe(true);
 		expect((await s.state()).kind).toBe("interrupted");
@@ -293,7 +293,7 @@ describe("apply", () => {
 			writeFileSync(join(fx.dir, ".git", "index.lock"), "someone else's");
 		});
 		await s.draftSetFile(c1, "a.txt", Buffer.from(edited));
-		expect((await s.apply()).kind).toBe("moved");
+		expect((await s.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("moved");
 		expect(fx.git("rev-parse", "HEAD")).toBe(c2);
 		expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
 		expect(readFileSync(join(fx.dir, ".git", "index.lock"), "utf8")).toBe("someone else's");
@@ -306,7 +306,7 @@ describe("apply", () => {
 		await s.draftSetFile(c1, "a.txt", null);
 		await s.draftSetFile(c1, "a.txt/inner.txt", Buffer.from("inner\n"));
 		await s.draftSetFile(c2, "added/deep/file.txt", Buffer.from("added\n"));
-		expect(await s.apply()).toMatchObject({ kind: "moved", unreverted: [] });
+		expect(await s.apply({ kind: "run", skip: [] }, () => undefined)).toMatchObject({ kind: "moved", unreverted: [] });
 		expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
 		expect(existsSync(join(fx.dir, "added"))).toBe(false);
 	});

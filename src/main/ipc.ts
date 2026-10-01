@@ -1,7 +1,7 @@
 import type { IpcMain, WebContents } from "electron";
 import type { MergeInputs } from "../engine/replay.ts";
-import type { ResolutionChoice, Session } from "../engine/session.ts";
-import { type ApiValue, apiChannel, type SuonetarApi } from "../shared/api.ts";
+import type { HookChoice, ResolutionChoice, Session } from "../engine/session.ts";
+import { APPLY_PROGRESS_CHANNEL, type ApiValue, apiChannel, type SuonetarApi } from "../shared/api.ts";
 import { resultOf } from "./result.ts";
 
 // The renderer is our own code, so a malformed argument is a bug, not user input; it is still checked because IPC is a trust boundary.
@@ -72,6 +72,17 @@ function choice(value: unknown): ResolutionChoice {
 	throw new ErrorIpcArgument("unknown resolution choice");
 }
 
+function argHooks(args: readonly unknown[], i: number): HookChoice {
+	const value = record(args[i], `argument ${i}`);
+	if (value.kind === "skip") {
+		return { kind: "skip" };
+	}
+	if (value.kind === "run" && Array.isArray(value.skip)) {
+		return { kind: "run", skip: value.skip.map((_, j) => argOid(value.skip as unknown[], j)) };
+	}
+	throw new ErrorIpcArgument(`argument ${i} is not a hook choice`);
+}
+
 function argChoices(args: readonly unknown[], i: number): ResolutionChoice[] {
 	const value = args[i];
 	if (!Array.isArray(value)) {
@@ -97,17 +108,18 @@ export type SessionApi = Pick<
 	| "resolve"
 	| "preview"
 	| "apply"
+	| "applyCancel"
 >;
 
 // One handler per `SuonetarApi` method, each a single call into the session; calls from any page but ours are refused.
 export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, trusted: (sender: WebContents) => boolean, log: (message: string, err: unknown) => void): void {
-	function handle<K extends keyof SuonetarApi>(name: K, fn: (args: readonly unknown[]) => Promise<ApiValue<K>>): void {
+	function handle<K extends keyof SuonetarApi>(name: K, fn: (args: readonly unknown[], sender: WebContents) => Promise<ApiValue<K>>): void {
 		ipc.handle(apiChannel(name), (event, ...args: unknown[]) =>
 			resultOf(() => {
 				if (!trusted(event.sender)) {
 					throw new ErrorIpcArgument("call from an unknown page");
 				}
-				return fn(args);
+				return fn(args, event.sender);
 			}, log),
 		);
 	}
@@ -147,5 +159,15 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 	});
 	handle("resolve", (a) => session.resolve(argInputs(a, 0), argString(a, 1), argChoices(a, 2)));
 	handle("preview", () => session.preview());
-	handle("apply", () => session.apply());
+	handle("apply", (a, sender) =>
+		session.apply(argHooks(a, 0), (progress) => {
+			if (!sender.isDestroyed()) {
+				sender.send(APPLY_PROGRESS_CHANNEL, progress);
+			}
+		}),
+	);
+	handle("applyCancel", async () => {
+		session.applyCancel();
+		return undefined;
+	});
 }

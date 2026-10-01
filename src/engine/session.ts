@@ -1,12 +1,14 @@
-import { intentCheck, type PublishResult, publish } from "./apply.ts";
+import { intentCheck, type PublishResult, preflightPosition, publish } from "./apply.ts";
 import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
 import { gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
+import { type HookCache, type HookCommit, type HookFailure, type HookPassResult, type HookProgress, hookIdentity, hooksPass } from "./hooks.ts";
 import { type Conflict, mergeTrees } from "./merge.ts";
 import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff } from "./objects.ts";
-import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees } from "./replay.ts";
+import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
+import { WorktreePrivate } from "./worktree-private.ts";
 import { blobWrite, signingWanted } from "./write.ts";
 
 export type SessionState =
@@ -29,11 +31,31 @@ export type PreviewResult =
 	| ({ readonly kind: "conflict" } & ConflictReport)
 	| { readonly kind: "clean"; readonly steps: readonly StepSummary[] };
 
+// Whether apply runs the pre-commit hook, and on which commits it does not.
+export type HookChoice = { readonly kind: "run"; readonly skip: readonly Oid[] } | { readonly kind: "skip" };
+
+export type ApplyProgress = { readonly step: "prepare" } | ({ readonly step: "hook" } & HookProgress) | { readonly step: "write" } | { readonly step: "publish" };
+
+type HookChanges = readonly (HookCommit & { readonly paths: readonly string[] })[];
+
 export type ApplyResult =
 	| Exclude<PreviewResult, { kind: "clean" }>
 	| Exclude<PublishResult, { kind: "published" }>
-	// `warning` is set when publishing succeeded but tidying up the applied drafts did not; the drafts then show as current or orphaned.
-	| { readonly kind: "published"; readonly warning: string | undefined };
+	// The pre-commit hook failed on a commit; nothing was published.
+	| ({ readonly kind: "hook-failed" } & HookFailure)
+	// Running the hook at all failed (the private worktree, git itself); nothing was published.
+	| { readonly kind: "hook-error"; readonly message: string }
+	// The hook undid every edit (a formatter reverting a whitespace change): nothing to publish, and the drafts were cleared as if published.
+	| { readonly kind: "hook-reverted"; readonly hookChanges: HookChanges }
+	| { readonly kind: "cancelled" }
+	| {
+			readonly kind: "published";
+			// Set when publishing succeeded but tidying up the applied drafts did not; the drafts then show as current or orphaned.
+			readonly warning: string | undefined;
+			// What the pre-commit hook changed while checking each commit, and the commits that had no hook to run.
+			readonly hookChanges: HookChanges;
+			readonly hookless: readonly HookCommit[];
+	  };
 
 export type DocumentFile = {
 	readonly path: string;
@@ -96,6 +118,8 @@ export class Session {
 	readonly repo: Repo;
 	readonly #cat: CatFile;
 	readonly #mutex: Mutex;
+	readonly #hookCache: HookCache = new Map();
+	#applyAbort: AbortController | undefined;
 
 	private constructor(repo: Repo, cat: CatFile) {
 		this.repo = repo;
@@ -326,28 +350,128 @@ export class Session {
 		return this.#mutex.run(async () => (await this.#plan()).preview);
 	}
 
-	apply(): Promise<ApplyResult> {
-		return this.#mutex.run(async (): Promise<ApplyResult> => {
-			const pending = intentCheck(this.repo);
-			if (pending) {
-				return pending;
+	// Publishes every draft: replay, the pre-commit hook on each rewritten commit (unless skipped), then the locked publish.
+	async apply(hooks: HookChoice, progress: (p: ApplyProgress) => void): Promise<ApplyResult> {
+		// Created before queueing, so a cancel pressed while the apply waits or prepares is not lost.
+		const abort = new AbortController();
+		this.#applyAbort = abort;
+		try {
+			return await this.#mutex.run(() => this.#apply(hooks, progress, abort.signal));
+		} finally {
+			if (this.#applyAbort === abort) {
+				this.#applyAbort = undefined;
 			}
-			const plan = await this.#plan();
-			if (plan.preview.kind !== "clean" || plan.steps === undefined) {
-				return plan.preview.kind === "clean" ? { kind: "nothing" } : plan.preview;
+		}
+	}
+
+	// Stops the apply in progress if it has not started publishing; publishing itself is never interrupted. Not serialised, since the apply holds the mutex.
+	applyCancel(): void {
+		this.#applyAbort?.abort();
+	}
+
+	async #apply(hooks: HookChoice, progress: (p: ApplyProgress) => void, signal: AbortSignal): Promise<ApplyResult> {
+		const pending = intentCheck(this.repo);
+		if (pending) {
+			return pending;
+		}
+		const plan = await this.#plan();
+		if (plan.preview.kind !== "clean" || plan.steps === undefined) {
+			return plan.preview.kind === "clean" ? { kind: "nothing" } : plan.preview;
+		}
+		let steps = plan.steps;
+		let hookChanges: HookChanges = [];
+		let hookless: readonly HookCommit[] = [];
+		if (hooks.kind === "run") {
+			const hooked = await this.#hooksRun(plan.stack, steps, hooks.skip, progress, signal);
+			if (hooked.kind !== "passed") {
+				return hooked;
 			}
-			const { tip, rewritten } = await replayCommit(this.repo, plan.stack.baseOid, plan.steps, await signingWanted(this.repo));
-			const published = await publish(this.repo, plan.stack.branch, plan.stack.tipOid, tip, `suonetar: apply ${rewritten.length} commits`);
-			if (published.kind !== "published") {
-				return published;
-			}
-			try {
+			steps = hooked.steps;
+			hookChanges = hooked.changed;
+			hookless = hooked.hookless;
+			if (!steps.some((s) => s.rewrite)) {
 				await this.#draftsClear(plan.applied);
-				return { kind: "published", warning: undefined };
-			} catch (err) {
-				return { kind: "published", warning: `published, but the applied drafts could not be cleared: ${(err as Error).message}` };
+				return { kind: "hook-reverted", hookChanges };
 			}
-		});
+		}
+		if (signal.aborted) {
+			return { kind: "cancelled" };
+		}
+		progress({ step: "write" });
+		const { tip, rewritten } = await replayCommit(this.repo, plan.stack.baseOid, steps, await signingWanted(this.repo));
+		progress({ step: "publish" });
+		const published = await publish(this.repo, plan.stack.branch, plan.stack.tipOid, tip, `suonetar: apply ${rewritten.length} commits`);
+		if (published.kind !== "published") {
+			return published;
+		}
+		try {
+			await this.#draftsClear(plan.applied);
+			return { kind: "published", warning: undefined, hookChanges, hookless };
+		} catch (err) {
+			return { kind: "published", warning: `published, but the applied drafts could not be cleared: ${(err as Error).message}`, hookChanges, hookless };
+		}
+	}
+
+	// The pre-commit pass in the private worktree, with its steps reflagged. Any failure of the machinery itself becomes `hook-error`, so the user can still apply without hooks.
+	async #hooksRun(
+		stack: Stack,
+		steps: readonly ReplayStep[],
+		skip: readonly Oid[],
+		progress: (p: ApplyProgress) => void,
+		signal: AbortSignal,
+	): Promise<Extract<HookPassResult, { kind: "passed" }> | Extract<ApplyResult, { kind: "hook-failed" | "hook-error" | "cancelled" | "moved" | "refused" | "busy" }>> {
+		try {
+			const identity = await hookIdentity(this.repo);
+			if (identity === undefined) {
+				return { kind: "passed", steps, changed: [], hookless: [] };
+			}
+			const blocked = await preflightPosition(this.repo, stack.branch, stack.tipOid);
+			if (blocked) {
+				return blocked;
+			}
+			if (signal.aborted) {
+				return { kind: "cancelled" };
+			}
+			progress({ step: "prepare" });
+			const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
+			const wt = await WorktreePrivate.acquire(this.repo, stack.baseOid);
+			if (wt === "busy") {
+				return { kind: "busy" };
+			}
+			let pass: HookPassResult;
+			try {
+				pass = await hooksPass(this.repo, wt, {
+					baseOid: stack.baseOid,
+					baseTree,
+					steps,
+					skip: new Set(skip),
+					identity,
+					cache: this.#hookCache,
+					progress: (p) => progress({ step: "hook", ...p }),
+					signal,
+				});
+			} finally {
+				try {
+					await wt.park(stack.baseOid);
+				} finally {
+					wt.release();
+				}
+			}
+			switch (pass.kind) {
+				case "passed":
+					return { ...pass, steps: stepsReflag(baseTree, pass.steps) };
+				case "failed":
+					return { ...pass, kind: "hook-failed" };
+				case "cancelled":
+					return pass;
+				default: {
+					const never: never = pass;
+					throw new Error(`unknown hook pass result ${String(never)}`);
+				}
+			}
+		} catch (err) {
+			return { kind: "hook-error", message: (err as Error).message };
+		}
 	}
 
 	async #plan(): Promise<{ stack: Stack; preview: PreviewResult; steps?: readonly ReplayStep[]; applied: DraftEntry[] }> {

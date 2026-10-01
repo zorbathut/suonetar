@@ -53,3 +53,18 @@ If the branch is somewhere else entirely, another process moved it. Suonetar's r
 
 - Drafts and conflict resolutions live under `refs/suonetar/drafts`, survive `git gc --prune=now`, and the ref has its own reflog, so discarded drafts stay recoverable (`.git/logs/refs/suonetar/drafts` lists every state; `git reflog` does not display them because they are trees, not commits).
 - Every commit Suonetar replaces stays in the branch reflog; Suonetar sets `gc.reflogExpireUnreachable=1.year` in the repository's config so they are kept that long. `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` removes them.
+
+## The private worktree and pre-commit hooks
+
+Apply runs the repository's `pre-commit` hook on every commit it rewrites, before publishing anything. The hook runs in a private worktree at `.git/suonetar/wt`. It shows in `git worktree list` as detached and locked ("suonetar private worktree"). While a pass runs, `.git/suonetar/wt.lock` holds the pid of the Suonetar process using it.
+
+- **Removing it.** `git worktree remove --force --force .git/suonetar/wt` removes it; the next apply with a hook recreates it. A stale `wt.lock` (left by a process that no longer runs) is taken over automatically.
+- **What the hook sees.** The hook sees the commit's change staged on top of its parent, with HEAD detached at a stand-in for the parent. Hooks that check the branch name see no branch.
+- **What the hook does not see.** The worktree holds only tracked files: no `node_modules`, `.venv`, or build output. A hook that needs those fails, and the commit can be applied with the hook skipped for it, or the whole apply without hooks.
+- **Node module resolution.** Because the worktree sits inside the repository, Node's module resolution can still find the main worktree's `node_modules`, but `node_modules/.bin` is not on the hook's PATH.
+- **husky.** With husky's ignored `.husky/_` as `core.hooksPath`, the main worktree's copy of the hooks directory is used. Its dispatcher then runs the main worktree's `.husky/pre-commit`, not the commit's.
+- **npx.** `npx` is told not to download missing packages (`npm_config_yes=false`), so a hook that relies on `node_modules` fails rather than fetching tools from the registry.
+- **PATH.** Suonetar started from a desktop launcher may lack PATH entries a shell profile adds (`~/.cargo/bin`, nvm). Hooks that call such tools then fail; start Suonetar from a shell.
+- **LFS and partial clones.** LFS files are pointer files in the private worktree. In a partial clone, the first checkout of the private worktree fetches every blob it needs.
+- **Cancelling.** Cancel sends the hook's process group SIGTERM, then SIGKILL two seconds later. Containers a Docker-based hook started are outside it and keep running. lint-staged keeps a backup in `refs/stash` while it runs, so a cancel in the middle can leave a "lint-staged automatic backup" entry in `git stash list`; it holds only the hook's view of the commit and can be dropped.
+- **If Suonetar itself is killed mid-hook,** the hook's processes keep running in the private worktree until they finish; the next apply takes over the worktree regardless.

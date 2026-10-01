@@ -69,7 +69,7 @@ function intentParse(text: string): Intent {
 	return value as unknown as Intent;
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return true;
@@ -129,6 +129,19 @@ async function positionCheck(repo: Repo, branch: string, oldTip: Oid): Promise<s
 
 // Everything that can be checked without the lock; done first so the lock is held as briefly as possible.
 async function preflight(repo: Repo, branch: string, oldTip: Oid, newTip: Oid): Promise<PublishResult | undefined> {
+	const blocked = await preflightPosition(repo, branch, oldTip);
+	if (blocked) {
+		return blocked;
+	}
+	const inTheWay = await ignoredInTheWay(repo, oldTip, newTip);
+	if (inTheWay.length > 0) {
+		return { kind: "refused", reason: `ignored files would be overwritten: ${inTheWay.join(", ")}` };
+	}
+	return undefined;
+}
+
+// The checks that need no new tip: the branch is checked out here and unmoved, no git operation is in progress, and no other worktree has it. Also run before slow work (hooks) so it is not wasted.
+export async function preflightPosition(repo: Repo, branch: string, oldTip: Oid): Promise<Extract<PublishResult, { kind: "moved" | "refused" }> | undefined> {
 	const moved = await positionCheck(repo, branch, oldTip);
 	if (moved) {
 		return { kind: "moved", reason: moved, unreverted: [] };
@@ -146,10 +159,6 @@ async function preflight(repo: Repo, branch: string, oldTip: Oid, newTip: Oid): 
 		} else if (line === `branch ${branch}` && existsSync(worktreePath) && realpathSync(worktreePath) !== here) {
 			return { kind: "refused", reason: `${branch} is also checked out in ${worktreePath}` };
 		}
-	}
-	const inTheWay = await ignoredInTheWay(repo, oldTip, newTip);
-	if (inTheWay.length > 0) {
-		return { kind: "refused", reason: `ignored files would be overwritten: ${inTheWay.join(", ")}` };
 	}
 	return undefined;
 }

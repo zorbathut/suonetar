@@ -39,7 +39,6 @@ export async function replayTrees(
 	const steps: ReplayStep[] = [];
 	let oldParentTree = baseTree;
 	let newParentTree = baseTree;
-	let parentRewritten = false;
 	for (const commit of commits) {
 		const edit = edits.get(commit.oid);
 		const theirs = edit?.tree ?? commit.tree;
@@ -63,14 +62,24 @@ export async function replayTrees(
 				);
 			}
 		}
-		const message = edit?.message ?? commit.message;
-		const rewrite: boolean = parentRewritten || tree !== commit.tree || !message.equals(commit.message);
-		steps.push({ commit, tree, message, rewrite, empty: tree === newParentTree });
-		parentRewritten = rewrite;
+		steps.push({ commit, tree, message: edit?.message ?? commit.message, rewrite: false, empty: false });
 		oldParentTree = commit.tree;
 		newParentTree = tree;
 	}
-	return { kind: "clean", steps };
+	return { kind: "clean", steps: stepsReflag(baseTree, steps) };
+}
+
+// Sets `rewrite` and `empty` from the trees and messages: after the replay, and again after the pre-commit pass changed trees.
+export function stepsReflag(baseTree: Oid, steps: readonly ReplayStep[]): ReplayStep[] {
+	let parentTree = baseTree;
+	let parentRewritten = false;
+	return steps.map((step) => {
+		const rewrite = parentRewritten || step.tree !== step.commit.tree || !step.message.equals(step.commit.message);
+		const flagged = { ...step, rewrite, empty: step.tree === parentTree };
+		parentRewritten = rewrite;
+		parentTree = step.tree;
+		return flagged;
+	});
 }
 
 export type Rewritten = { readonly old: Oid; readonly new: Oid };

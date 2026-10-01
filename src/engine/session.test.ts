@@ -63,7 +63,7 @@ describe("session drafts", () => {
 		await session.draftSetFile(c3, "b.txt", null);
 		const files = (await session.commitDocument(c3)).files;
 		expect(Object.fromEntries(files.map((f) => [f.path, f.status]))).toEqual({ "b.txt": "D", "new/file.txt": "A", "run.sh": "A" });
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
 		expect(readFileSync(join(fx.dir, "new/file.txt"), "utf8")).toBe("new\n");
 	});
@@ -78,7 +78,7 @@ describe("session drafts", () => {
 		session = await Session.openRepo(fx.repo);
 		await session.draftRestore(c4, "link", "parent");
 		expect((await file(c4, "link")).status).toBe("=");
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("ls-tree", "HEAD", "link").split(" ")[0]).toBe("120000");
 		expect(fx.git("rev-parse", "HEAD:link")).toBe(fx.git("rev-parse", `${c3}:link`));
 	});
@@ -121,7 +121,7 @@ describe("session drafts", () => {
 		const c3 = fx.commit("c3", {});
 		await session.draftSetFile(c3, "run.sh", null);
 		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("ls-tree", "HEAD", "run.sh").split(" ")[0]).toBe("100755");
 	});
 
@@ -151,10 +151,10 @@ describe("session drafts", () => {
 		fx.git("rebase", "-q", "-x", "git commit -q --amend --no-edit --allow-empty", "HEAD~2");
 		const statuses = await drafts();
 		expect(statuses.map((d) => d.kind)).toEqual(["rebased"]);
-		expect((await session.apply()).kind).toBe("drafts-need-attention");
+		expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("drafts-need-attention");
 		await session.draftConfirm(c1);
 		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("show", "HEAD~1:a.txt")).toContain("draft");
 	});
 
@@ -208,7 +208,7 @@ describe("session drafts", () => {
 			kind: "resolved",
 		});
 		expect((await session.preview()).kind).toBe("clean");
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("show", "HEAD:a.txt")).toContain("both");
 		expect(fx.git("show", "HEAD~2:a.txt")).toContain("suonetar");
 	});
@@ -225,7 +225,7 @@ describe("session drafts", () => {
 		fx.git("config", "user.signingKey", "fake");
 		await session.draftSetFile(c1, "a.txt", Buffer.from("signed edit\n"));
 		expect((await session.preview()).kind).toBe("clean");
-		expect(await session.apply()).toEqual({ kind: "published", warning: undefined });
+		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("cat-file", "commit", "HEAD")).toContain("gpgsig");
 		expect(fx.git("cat-file", "commit", "HEAD~1")).toContain("gpgsig");
 		expect(fx.git("log", "-1", "--format=%an <%ae> %at", "HEAD~1")).toBe(fx.git("log", "-1", "--format=%an <%ae> %at", c1));

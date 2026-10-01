@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { apiChannel, type SuonetarApi, type SuonetarShell } from "../shared/api.ts";
+import type { ApplyProgress } from "../engine/session.ts";
+import { APPLY_PROGRESS_CHANNEL, apiChannel, type SuonetarApi, type SuonetarShell } from "../shared/api.ts";
 
 const api: SuonetarApi = {
 	state: () => ipcRenderer.invoke(apiChannel("state")),
@@ -16,7 +17,8 @@ const api: SuonetarApi = {
 	draftAdopt: (against) => ipcRenderer.invoke(apiChannel("draftAdopt"), against),
 	resolve: (inputs, key, choices) => ipcRenderer.invoke(apiChannel("resolve"), inputs, key, choices),
 	preview: () => ipcRenderer.invoke(apiChannel("preview")),
-	apply: () => ipcRenderer.invoke(apiChannel("apply")),
+	apply: (hooks) => ipcRenderer.invoke(apiChannel("apply"), hooks),
+	applyCancel: () => ipcRenderer.invoke(apiChannel("applyCancel")),
 };
 
 const shell: SuonetarShell = {
@@ -31,6 +33,9 @@ const shell: SuonetarShell = {
 			);
 		});
 		ipcRenderer.send("suonetar:close-ready");
+	},
+	onApplyProgress(handler) {
+		ipcRenderer.on(APPLY_PROGRESS_CHANNEL, (_event, progress: ApplyProgress) => handler(progress));
 	},
 };
 

@@ -35,8 +35,9 @@ describe("viewDecide", () => {
 		expect(viewDecide(summary(), { kind: "draft", against: "gone" }, sel(2))).toEqual({ kind: "commit", oid: "o3", readOnly: false });
 	});
 
-	it("never replaces the resolve view", () => {
+	it("never replaces the resolve or hook view", () => {
 		expect(viewDecide(summary({ commits: [] }), { kind: "resolve" }, sel(0))).toEqual({ kind: "keep" });
+		expect(viewDecide(summary({ commits: [] }), { kind: "hook" }, sel(0))).toEqual({ kind: "keep" });
 	});
 
 	it("starts at the oldest commit, and reports an empty stack", () => {

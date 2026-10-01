@@ -1,12 +1,13 @@
 import type { WebContents } from "electron";
 import { describe, expect, it } from "vitest";
-import { apiChannel, type Result, type SuonetarApi } from "../shared/api.ts";
+import { APPLY_PROGRESS_CHANNEL, apiChannel, type Result, type SuonetarApi } from "../shared/api.ts";
 import { ipcRegister, type SessionApi } from "./ipc.ts";
 
 type Handler = (event: { sender: WebContents }, ...args: unknown[]) => Promise<Result<unknown>>;
 
 const OID = "0123456789abcdef0123456789abcdef01234567";
-const ours = {} as WebContents;
+const sent: [string, unknown][] = [];
+const ours = { isDestroyed: () => false, send: (channel: string, value: unknown) => sent.push([channel, value]) } as unknown as WebContents;
 const stranger = {} as WebContents;
 
 // Every API method; a missing key is a compile error.
@@ -26,6 +27,7 @@ const NAMES: Record<keyof SuonetarApi, true> = {
 	resolve: true,
 	preview: true,
 	apply: true,
+	applyCancel: true,
 };
 
 function harness() {
@@ -92,6 +94,8 @@ describe("ipcRegister", () => {
 		["an unknown restore source", "draftRestore", [OID, "a.txt", "somewhere"]],
 		["a malformed choice", "resolve", [{ base: OID, ours: OID, theirs: OID }, "key", [{ path: "p", sideways: true }]]],
 		["incomplete merge inputs", "resolve", [{ base: OID }, "key", []]],
+		["an unknown hook choice", "apply", [{ kind: "sometimes" }]],
+		["a non-oid commit to skip", "apply", [{ kind: "run", skip: ["HEAD"] }]],
 	] as const)("rejects %s without calling the session", async (_what, name, args) => {
 		const { invoke, calls } = harness();
 		const result = await invoke(name, ...args);
@@ -111,5 +115,16 @@ describe("ipcRegister", () => {
 		const passed = calls[0]?.[1][2] as { path: string; content?: unknown }[];
 		expect(passed.map((c) => c.path)).toEqual(["a", "b", "c", "d"]);
 		expect(Buffer.isBuffer(passed[2]?.content)).toBe(true);
+	});
+
+	it("passes the hook choice through and sends progress to the calling page", async () => {
+		const { invoke, calls } = harness();
+		sent.length = 0;
+		expect((await invoke("apply", { kind: "run", skip: [OID] })).ok).toBe(true);
+		const [name, args] = calls[0] ?? ["", []];
+		expect(name).toBe("apply");
+		expect(args[0]).toEqual({ kind: "run", skip: [OID] });
+		(args[1] as (p: unknown) => void)({ step: "write" });
+		expect(sent).toEqual([[APPLY_PROGRESS_CHANNEL, { step: "write" }]]);
 	});
 });

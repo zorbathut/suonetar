@@ -1,9 +1,11 @@
 import "./style.css";
+import type { HookChoice } from "../engine/session.ts";
 import type { ApiValue } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { Autosave } from "./autosave.ts";
 import { CommitView, type CommitViewHost } from "./commit-view.ts";
 import { ask, button, el } from "./dom.ts";
+import { type HookSkip, type HookStop, hookSummary, hookViewCreate, progressText } from "./hook-view.ts";
 import type { CommitIdentity } from "./reselect.ts";
 import { type Report, ResolveView, type ResolveViewHost } from "./resolve-view.ts";
 import { branchShort, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary } from "./stack-view.ts";
@@ -20,6 +22,7 @@ function byId(id: string): HTMLElement {
 const whereEl = byId("where");
 const draftsEl = byId("drafts");
 const applyEl = byId("apply");
+const cancelEl = byId("cancel");
 const statusEl = byId("status");
 const stackEl = byId("stack");
 const docEl = byId("doc");
@@ -29,6 +32,7 @@ type View =
 	| { readonly kind: "commit"; readonly view: CommitView; readonly readOnly: boolean }
 	| { readonly kind: "draft"; readonly against: string; readonly view: CommitView }
 	| { readonly kind: "resolve"; readonly view: ResolveView }
+	| { readonly kind: "hook"; readonly stop: HookStop }
 	// Interrupted, unavailable, or an empty stack: a message instead of a document.
 	| { readonly kind: "blocked" };
 
@@ -42,9 +46,12 @@ let busy = false;
 let opRunning = false;
 let opChain: Promise<void> = Promise.resolve();
 let saveFailureShown: string | undefined;
+// Commits the user chose to apply without their hook, from the hook view; listed there, and dropped once the hook view is left or Apply is pressed afresh.
+let hookSkips: readonly HookSkip[] = [];
 
-function statusSet(text: string, kind: "info" | "ok" | "error"): void {
+function statusSet(text: string, kind: "info" | "ok" | "error", detail = ""): void {
 	statusEl.textContent = text;
+	statusEl.title = detail;
 	statusEl.className = `status-${kind}`;
 	saveFailureShown = undefined;
 }
@@ -132,6 +139,9 @@ async function viewLeave(): Promise<boolean> {
 	if (view.kind === "commit" || view.kind === "draft" || view.kind === "resolve") {
 		view.view.destroy();
 	}
+	if (view.kind === "hook") {
+		hookSkips = [];
+	}
 	docEl.replaceChildren();
 	view = { kind: "none" };
 	return true;
@@ -146,6 +156,7 @@ function viewShown(): ViewShown {
 		case "none":
 		case "blocked":
 		case "resolve":
+		case "hook":
 			return { kind: view.kind };
 		default: {
 			const never: never = view;
@@ -200,6 +211,7 @@ function busySet(value: boolean): void {
 	if (applyEl instanceof HTMLButtonElement) {
 		applyEl.disabled = value;
 	}
+	cancelEl.hidden = !value;
 }
 
 function bannersUpdate(): void {
@@ -442,7 +454,45 @@ function applyWarnings(steps: readonly { readonly oid: string; readonly rewrite:
 	].filter((w) => w !== "");
 }
 
-async function applyRun(): Promise<void> {
+async function hookShow(stop: HookStop): Promise<void> {
+	const message = stop.kind === "hook-failed" ? "pre-commit stopped the apply; nothing was changed." : `pre-commit could not be run; nothing was changed: ${stop.message}`;
+	// Leaving the previous hook view would forget the skips this retry was made with.
+	const skips = hookSkips;
+	if (!(await viewLeave())) {
+		statusSet(message, "error");
+		return;
+	}
+	hookSkips = skips;
+	docEl.replaceChildren(hookViewCreate(hookHost, stop, hookSkips));
+	docEl.scrollTop = 0;
+	view = { kind: "hook", stop };
+	statusSet(message, "error");
+}
+
+function hookSkipIds(): string[] {
+	return hookSkips.map((s) => s.oid);
+}
+
+const hookHost = {
+	edit: (oid: string) => void op("Selecting", () => commitSelect(oid)),
+	applyAgain: () => void op("Apply", () => applyRun({ kind: "run", skip: hookSkipIds() })),
+	applySkippingThis: (oid: string, subject: string) => {
+		hookSkips = [...hookSkips, { oid, subject }];
+		void op("Apply", () => applyRun({ kind: "run", skip: hookSkipIds() }));
+	},
+	applyWithoutHooks: () =>
+		void op("Apply", async () => {
+			const answer = await ask("Apply without running pre-commit?", "No commit is checked by the hook, and nothing it would have fixed (formatting, say) is fixed.", [
+				{ label: "Apply without hooks", value: "apply" },
+				{ label: "Cancel", value: "cancel", primary: true },
+			]);
+			if (answer === "apply") {
+				await applyRun({ kind: "skip" });
+			}
+		}),
+};
+
+async function applyRun(hooks: HookChoice): Promise<void> {
 	if (view.kind === "resolve" && view.view.dirty()) {
 		statusSet("Save or leave the resolution first.", "error");
 		return;
@@ -483,14 +533,37 @@ async function applyRun(): Promise<void> {
 	statusSet("Applying…", "info");
 	let outcome: ApiValue<"apply">;
 	try {
-		outcome = await call(api.apply());
+		outcome = await call(api.apply(hooks));
 	} finally {
 		busySet(false);
 	}
+	// A hook view describes the last failure; any other outcome makes it stale.
+	if (outcome.kind !== "hook-failed" && outcome.kind !== "hook-error") {
+		hookSkips = [];
+		if (view.kind === "hook") {
+			await leaveAndShow(followed, undefined);
+		}
+	}
 	switch (outcome.kind) {
-		case "published":
-			statusSet(outcome.warning === undefined ? "Applied." : `Applied, with a problem: ${outcome.warning}`, outcome.warning === undefined ? "ok" : "error");
+		case "published": {
+			const hooksDid = hookSummary(outcome.hookChanges, outcome.hookless);
+			const text = outcome.warning === undefined ? `Applied. ${hooksDid.text}` : `Applied, with a problem: ${outcome.warning} ${hooksDid.text}`;
+			statusSet(text.trim(), outcome.warning === undefined ? "ok" : "error", hooksDid.detail);
 			await refresh();
+			return;
+		}
+		case "hook-reverted": {
+			const hooksDid = hookSummary(outcome.hookChanges, []);
+			statusSet(`pre-commit undid every edit, so there was nothing to apply; the edits were cleared. ${hooksDid.text}`, "info", hooksDid.detail);
+			await refresh();
+			return;
+		}
+		case "hook-failed":
+		case "hook-error":
+			await hookShow(outcome);
+			return;
+		case "cancelled":
+			statusSet("Apply cancelled; nothing was changed.", "info");
 			return;
 		case "nothing":
 			statusSet("Nothing to apply.", "info");
@@ -527,7 +600,26 @@ async function applyRun(): Promise<void> {
 	}
 }
 
-applyEl.addEventListener("click", () => void op("Apply", applyRun));
+applyEl.addEventListener(
+	"click",
+	() =>
+		void op("Apply", () => {
+			hookSkips = [];
+			return applyRun({ kind: "run", skip: [] });
+		}),
+);
+// Outside the operation queue, which the running apply holds.
+cancelEl.addEventListener("click", () => {
+	statusSet("Cancelling…", "info");
+	call(api.applyCancel()).catch((err: unknown) => report("Cancelling failed", err));
+});
+window.suonetarShell.onApplyProgress((progress) => {
+	if (busy) {
+		statusSet(progressText(progress), "info");
+		// Publishing is not interruptible.
+		cancelEl.hidden = progress.step === "write" || progress.step === "publish";
+	}
+});
 
 function commitStep(dir: 1 | -1): void {
 	void op("Selecting", async () => {

@@ -57,7 +57,13 @@ try {
 		rmSync(dir, { recursive: true });
 		console.log("draft saved");
 	} else if (command === "preview" || command === "apply") {
-		console.log(JSON.stringify(command === "preview" ? await session.preview() : await session.apply(), (_k, v) => (v?.type === "Buffer" ? "<buffer>" : v), 2));
+		console.log(
+			JSON.stringify(
+				command === "preview" ? await session.preview() : await session.apply({ kind: "run", skip: [] }, () => undefined),
+				(_k, v) => (v?.type === "Buffer" ? "<buffer>" : v),
+				2,
+			),
+		);
 	} else {
 		throw new Error(`unknown command ${command}`);
 	}
