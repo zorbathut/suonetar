@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<title>Suonetar</title>
+<rect x="4" y="4" width="56" height="56" rx="13" fill="#4a3b5c"/>
+<g fill="#eadcbf"><rect x="20" y="17" width="24" height="6" rx="1"/><rect x="20" y="33" width="24" height="6" rx="1"/><rect x="20" y="41" width="24" height="6" rx="1"/></g>
+<rect x="20" y="25" width="24" height="6" rx="1" fill="#e0525d"/>
+<path d="M44 28C52 30 54 40 50 52" stroke="#e0525d" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+<g fill="#c8925a"><rect x="14" y="10" width="36" height="7" rx="3.5"/><rect x="14" y="47" width="36" height="7" rx="3.5"/></g>
+</svg>

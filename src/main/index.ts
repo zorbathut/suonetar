@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
 import { Session } from "../engine/session.ts";
 import { ipcRegister } from "./ipc.ts";
 
@@ -13,12 +13,24 @@ function repoArgument(): string {
 	return resolve(process.env.INIT_CWD ?? process.cwd(), args[0] ?? ".");
 }
 
+// Rendered from icon.svg, since Electron cannot load SVG: `rsvg-convert -w 256 -h 256 resources/icon.svg -o resources/icon.png`.
+function iconLoad(): NativeImage {
+	const path = join(import.meta.dirname, "../../resources/icon.png");
+	const icon = nativeImage.createFromPath(path);
+	// Electron gives an empty image for a path it cannot read, without a word.
+	if (icon.isEmpty()) {
+		log("the window icon did not load", path);
+	}
+	return icon;
+}
+
 function windowCreate(repoPath: string): BrowserWindow {
 	const win = new BrowserWindow({
 		width: 1600,
 		height: 1000,
 		title: `Suonetar — ${repoPath}`,
 		backgroundColor: "#1e1e1e",
+		icon: iconLoad(),
 		webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
 	});
 	const contents = win.webContents;
