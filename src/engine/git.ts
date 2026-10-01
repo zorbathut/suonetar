@@ -39,6 +39,8 @@ export type Repo = {
 	readonly envExtra: Readonly<Record<string, string>>;
 };
 
+const WINDOWS = process.platform === "win32";
+
 // Stable stderr for parsing, and no optional index-lock-taking refreshes behind the other process's back.
 const ENV_FIXED = { LANG: "C", LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" } as const;
 
@@ -112,8 +114,12 @@ function envHook(extra: Readonly<Record<string, string>>): Record<string, string
 			env[key] = value;
 		}
 	}
-	if (env.PATH !== undefined) {
-		env.PATH = env.PATH.split(delimiter)
+	// Windows names it `Path`, and a plain copy of process.env loses its case-insensitive lookup.
+	const pathKey = WINDOWS ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") : "PATH";
+	const path = pathKey === undefined ? undefined : env[pathKey];
+	if (pathKey !== undefined && path !== undefined) {
+		env[pathKey] = path
+			.split(delimiter)
 			.filter((dir) => !/[/\\]node_modules[/\\]\.bin$/.test(dir) && !/[/\\]node-gyp-bin$/.test(dir))
 			.join(delimiter);
 	}
