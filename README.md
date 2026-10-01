@@ -1,5 +1,9 @@
 # Suonetar
 
+[![Language: TypeScript](https://img.shields.io/badge/language-TypeScript-blue)](https://www.typescriptlang.org/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+[![Support](https://img.shields.io/discord/703688553707601962?label=support&logo=discord)](https://discord.gg/vQv9DMA)
+
 Suonetar is a commit-stack editor for Git. It's designed for weirdos who use LLMs a lot, tell their LLMs to split up work into a lot of small independent commits, and then have to deal with reviewing like twelve commits at once. Who would do something like that? Bizarre.
 
 It lets you scrub through the commits on a branch, open any one of them in a real editor, change its files or message, and Apply; every commit above it is restacked automatically, with nothing left half-done in the repository.
