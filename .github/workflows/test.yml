@@ -9,17 +9,32 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
       # The engine tests drive real git and use commands from recent releases, which the runner image's git can lag behind.
-      - name: Install current git
+      - name: Install current git (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo add-apt-repository -y ppa:git-core/ppa
           sudo apt-get update
           sudo apt-get install -y git
+
+      - name: Install current git (Windows)
+        if: runner.os == 'Windows'
+        run: choco upgrade git -y --no-progress
+
+      - name: Check git version
+        shell: bash
+        run: |
           git --version
+          version=$(git --version | sed -E 's/^git version ([0-9]+\.[0-9]+).*/\1/')
+          printf '%s\n%s\n' 2.55 "$version" | sort -V -C || { echo "git 2.55 or later is needed, found $version"; exit 1; }
 
       - uses: actions/setup-node@v7
         with:

@@ -12,7 +12,7 @@ When Suonetar finds that file:
 - if `phase` is `locking` and `.git/index.lock` does not exist, the apply never got the lock, nothing changed, and Suonetar deletes the record by itself;
 - otherwise the apply stopped partway, and Suonetar refuses to do anything until it is sorted out, showing the record. Nothing has been lost. Your drafts are only cleared after a successful apply, and they live in `refs/suonetar/drafts`.
 
-What to do depends on `phase`. Make sure the process named by `pid` is not running first (`ps -p <pid>`).
+What to do depends on `phase`. Make sure the process named by `pid` is not running first (`ps -p <pid>`; on Windows `tasklist /FI "PID eq <pid>"`, remembering that Windows soon reuses the pid of a process that has exited).
 
 ## `locking` or `locked`
 
@@ -69,7 +69,7 @@ git reset --keep <old>                   # the oid from that entry's message
 
 Apply runs the repository's `pre-commit` hook on every commit it rewrites, before publishing anything. The hook runs in a private worktree at `.git/suonetar/wt`. It shows in `git worktree list` as detached and locked ("suonetar private worktree"). While a pass runs, `.git/suonetar/wt.lock` holds the pid of the Suonetar process using it.
 
-- **Removing it.** `git worktree remove --force --force .git/suonetar/wt` removes it; the next apply with a hook recreates it. A stale `wt.lock` (left by a process that no longer runs) is taken over automatically.
+- **Removing it.** `git worktree remove --force --force .git/suonetar/wt` removes it; the next apply with a hook recreates it. A stale `wt.lock` (left by a process that no longer runs) is taken over automatically, unless its pid has since been reused by a running process, which Windows does readily; then delete `wt.lock` by hand once no Suonetar is running.
 - **What the hook sees.** The hook sees the commit's change staged on top of its parent, with HEAD detached at a stand-in for the parent. Hooks that check the branch name see no branch.
 - **What the hook does not see.** The worktree holds only tracked files: no `node_modules`, `.venv`, or build output. A hook that needs those fails, and the commit can be applied with the hook skipped for it, or the whole apply without hooks.
 - **Node module resolution.** Because the worktree sits inside the repository, Node's module resolution can still find the main worktree's `node_modules`, but `node_modules/.bin` is not on the hook's PATH.

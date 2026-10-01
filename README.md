@@ -18,7 +18,7 @@ Experimental and personal. It works on the author's repositories and is tested a
 
 ## Running it
 
-Needs Node 24 or later and git 2.55 (what it is developed and tested against; older versions may lack commands it uses). Linux is the only platform it has been run on but like it *should* work anywhere, y'know?
+Needs Node 24 or later and git 2.55 (what it is developed and tested against; older versions may lack commands it uses). It runs on Linux and Windows (with Git for Windows); on Windows, cancelling a pre-commit hook is cruder, as [docs/recovery.md](docs/recovery.md#the-private-worktree-and-pre-commit-hooks) describes.
 
 ```sh
 npm install
