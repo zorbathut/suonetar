@@ -21,7 +21,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { ErrorNotOnBranch } from "./errors.ts";
 import { argChunks, gitOk, gitText, type Oid, type Repo, splitNul } from "./git.ts";
 import { type TreeSide, treeDiffRaw } from "./objects.ts";
@@ -488,7 +488,8 @@ async function diskSide(repo: Repo, path: string): Promise<TreeSide | "directory
 		return "directory";
 	}
 	if (stat.isSymbolicLink()) {
-		return { mode: "120000", oid: await gitText(repo, ["hash-object", "--stdin"], { input: readlinkSync(full) }) };
+		// Windows writes link targets with backslashes; git records them with slashes.
+		return { mode: "120000", oid: await gitText(repo, ["hash-object", "--stdin"], { input: readlinkSync(full).replaceAll(sep, "/") }) };
 	}
 	const mode = (stat.mode & 0o111) !== 0 ? "100755" : "100644";
 	return { mode, oid: await gitText(repo, ["hash-object", `--path=${path}`, "--", full]) };

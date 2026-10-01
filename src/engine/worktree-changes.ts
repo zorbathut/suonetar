@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readlink } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { type Indentation, indentationFor } from "./editorconfig.ts";
 import { ErrorGit } from "./errors.ts";
 import { type Oid, type Repo, splitNul } from "./git.ts";
@@ -171,7 +171,8 @@ async function diskRead(repo: Repo, path: string, limit: number): Promise<Read> 
 	try {
 		const stat = await lstat(full);
 		if (stat.isSymbolicLink()) {
-			return { data: Buffer.from(await readlink(full)), tooLarge: false };
+			// Windows writes link targets with backslashes; git records them with slashes.
+			return { data: Buffer.from((await readlink(full)).replaceAll(sep, "/")), tooLarge: false };
 		}
 		if (!stat.isFile()) {
 			return { data: undefined, tooLarge: false };
