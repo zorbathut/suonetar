@@ -135,6 +135,110 @@ describe("stackRead", () => {
 		expect(stack.baseOid).toBe(base);
 	});
 
+	describe("the branch's own copy on the server", () => {
+		beforeEach(() => {
+			fx.git("remote", "add", "origin", "/nonexistent");
+			fx.git("update-ref", "refs/remotes/origin/main", fx.git("rev-parse", "main"));
+			fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+			fx.git("switch", "-q", "-c", "feature");
+		});
+
+		test("is the base while the branch has commits it lacks", async () => {
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			fx.git("update-ref", "refs/remotes/origin/feature", f1);
+			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
+			expect(stack.commits.map((c) => c.oid)).toEqual([f2]);
+		});
+
+		test("gives way to the default branch once everything is pushed", async () => {
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
+			fx.git("update-ref", "refs/remotes/origin/feature", f2);
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.commits.map((c) => c.oid)).toEqual([f1, f2]);
+			expect(stack.commits.every((c) => c.published)).toBe(true);
+		});
+
+		test("is found through where git push sends it when it has another name", async () => {
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			fx.git("update-ref", "refs/remotes/origin/me/wip", f1);
+			fx.git("config", "push.default", "upstream");
+			fx.git("config", "branch.feature.remote", "origin");
+			fx.git("config", "branch.feature.merge", "refs/heads/me/wip");
+			const f2 = fx.commit("f2", { "a.txt": "f2\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/me/wip");
+			expect(stack.commits.map((c) => c.oid)).toEqual([f2]);
+		});
+
+		test("an upstream whose remote branch is gone falls back to the default branch", async () => {
+			fx.git("config", "branch.feature.remote", "origin");
+			fx.git("config", "branch.feature.merge", "refs/heads/feature");
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
+		});
+
+		test("an upstream that is a local branch is not the branch's copy", async () => {
+			const parent = fx.commit("parent work", { "p.txt": "p\n" });
+			fx.git("switch", "-q", "-c", "child", "--track", "feature");
+			const c1 = fx.commit("c1", { "a.txt": "c1\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.commits.map((c) => c.oid)).toEqual([parent, c1]);
+		});
+
+		test("a remote branch it was cut from and tracks is a parent, not its copy", async () => {
+			fx.git("switch", "-q", "--detach", "main");
+			const dev = fx.commit("dev work", { "d.txt": "d\n" });
+			fx.git("update-ref", "refs/remotes/origin/dev", dev);
+			fx.git("switch", "-q", "-c", "cut", "--track", "origin/dev");
+			const c1 = fx.commit("c1", { "a.txt": "c1\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.commits.map((c) => c.oid)).toEqual([dev, c1]);
+		});
+
+		test("wins a tie with the default branch", async () => {
+			fx.git("update-ref", "refs/remotes/origin/feature", "HEAD");
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
+			expect(stack.commits.map((c) => c.oid)).toEqual([f1]);
+		});
+
+		test("a rebase onto a newer default branch starts at the default, not the stale copy", async () => {
+			fx.commit("f1", { "a.txt": "f1\n" });
+			fx.git("update-ref", "refs/remotes/origin/feature", "HEAD");
+			fx.git("switch", "-q", "main");
+			const theirs = fx.commit("theirs", { "t.txt": "t\n" });
+			fx.git("update-ref", "refs/remotes/origin/main", theirs);
+			fx.git("switch", "-q", "feature");
+			fx.git("rebase", "-q", "origin/main");
+			const rebased = fx.git("rev-parse", "HEAD");
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.commits.map((c) => c.oid)).toEqual([rebased]);
+		});
+
+		test("after a pushed commit is rewritten, the stack starts where the branch left its copy", async () => {
+			const f1 = fx.commit("f1", { "a.txt": "f1\n" });
+			fx.commit("f2", { "a.txt": "f2\n" });
+			fx.git("update-ref", "refs/remotes/origin/feature", "HEAD");
+			fx.git("commit", "-q", "--amend", "-m", "f2 amended");
+			const amended = fx.git("rev-parse", "HEAD");
+			const f3 = fx.commit("f3", { "a.txt": "f3\n" });
+			const stack = await stackRead(fx.repo, cat);
+			expect(stack.baseRef).toBe("refs/remotes/origin/feature");
+			expect(stack.baseOid).toBe(f1);
+			expect(stack.commits.map((c) => c.oid)).toEqual([amended, f3]);
+		});
+	});
+
 	test("refuses a detached HEAD", async () => {
 		fx.git("switch", "-q", "--detach", "HEAD");
 		await expect(stackRead(fx.repo, cat)).rejects.toBeInstanceOf(ErrorNotOnBranch);

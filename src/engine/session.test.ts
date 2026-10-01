@@ -171,6 +171,16 @@ describe("session drafts", () => {
 		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
 	});
 
+	test("a draft on a pushed commit waits below a narrowed base and comes back once the branch is pushed", async () => {
+		fx.git("update-ref", "refs/remotes/origin/feature", c2);
+		await session.draftSetFile(c1, "a.txt", Buffer.from("edit to a pushed commit\n"));
+		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
+		const c3 = fx.commit("c3", { "c.txt": "c3\n" });
+		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
+		fx.git("update-ref", "refs/remotes/origin/feature", c3);
+		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
+	});
+
 	test("a message draft conflicts once the commit is reworded elsewhere", async () => {
 		await session.draftSetMessage(c1, Buffer.from("suonetar wording\n"));
 		fx.git("switch", "-q", "--detach", c1);

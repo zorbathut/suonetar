@@ -64,7 +64,7 @@ export async function branchCurrent(repo: Repo): Promise<string> {
 	return result.stdout.toString("utf8").trim();
 }
 
-// Remotes whose default branch can be a base: the conventional names for the hosting remote. Any other remote's HEAD (a laptop, a backup repository) may be a feature branch that already contains the tip, which would hide unmerged commits.
+// The conventional names for the hosting remote, whose default branch can be a base and where a branch's same-named copy is looked for. Any other remote's HEAD (a laptop, a backup repository) may be a feature branch that already contains the tip, which would hide unmerged commits.
 const BASE_REMOTES = ["origin", "upstream"];
 
 // The default branch of origin and upstream (`refs/remotes/<remote>/HEAD`, set by clone and fetch) and its local counterpart, then `init.defaultBranch` for repositories without a remote, then main and master.
@@ -80,12 +80,24 @@ async function baseCandidates(repo: Repo, branch: string): Promise<string[]> {
 	return [...new Set([...remoteDefaults, ...configured, ...BASE_FALLBACKS])].filter((ref) => ref !== branch);
 }
 
-// The base whose merge-base with the tip is newest. After `git fetch && git rebase origin/main` with a stale local main, origin/main is the right base; on the default branch itself, its remote copy is, so the stack is the unpushed commits.
+// The branch's own copies on the server: where `git push` sends it, and a same-named branch on the hosting remotes, which `git push origin <name>` without `-u` leaves. Not its upstream as such: a branch cut from `origin/dev` tracks `origin/dev`, a parent rather than its copy, and `push.default=simple` gives no push destination for it.
+async function branchCopies(repo: Repo, branch: string): Promise<string[]> {
+	// for-each-ref, unlike `rev-parse <branch>@{push}`, takes the full refname and prints nothing rather than failing when there is no destination.
+	const push = (await gitText(repo, ["for-each-ref", "--format=%(push)", branch])).trim();
+	const name = branch.replace(/^refs\/heads\//, "");
+	const pushes = push.startsWith("refs/remotes/") ? [push] : [];
+	return [...new Set([...pushes, ...BASE_REMOTES.map((remote) => `refs/remotes/${remote}/${name}`)])];
+}
+
+// The base whose merge-base with the tip is newest, competing the branch's own copies on the server, while it has commits they lack, against the default branch's; on a tie the copy wins. So a branch with unpushed work stacks just that work, and a fully pushed one shows everything since it left the default branch. After `git fetch && git rebase origin/main` with a stale local main or a stale copy, origin/main is the right base; on the default branch itself, its remote copy is, so the stack is the unpushed commits.
 async function baseFind(repo: Repo, branch: string, tipOid: Oid): Promise<{ ref: string; mergeBase: Oid }> {
 	const configured = await configGet(repo, "suonetar.base");
-	const candidates = configured !== undefined ? [configured] : await baseCandidates(repo, branch);
+	const candidates =
+		configured !== undefined
+			? [{ ref: configured, copy: false }]
+			: [...(await branchCopies(repo, branch)).map((ref) => ({ ref, copy: true })), ...(await baseCandidates(repo, branch)).map((ref) => ({ ref, copy: false }))];
 	let best: { ref: string; mergeBase: Oid } | undefined;
-	for (const ref of candidates) {
+	for (const { ref, copy } of candidates) {
 		if ((await revParse(repo, ref)) === undefined) {
 			continue;
 		}
@@ -94,6 +106,10 @@ async function baseFind(repo: Repo, branch: string, tipOid: Oid): Promise<{ ref:
 			continue;
 		}
 		const mergeBase = result.stdout.toString("utf8").trim();
+		// A copy that already has every commit of the branch leaves nothing unpushed, so the default branch decides.
+		if (copy && mergeBase === tipOid) {
+			continue;
+		}
 		if (best === undefined || (mergeBase !== best.mergeBase && (await isAncestor(repo, best.mergeBase, mergeBase)))) {
 			best = { ref, mergeBase };
 		}
