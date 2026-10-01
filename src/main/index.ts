@@ -139,7 +139,12 @@ async function main(): Promise<void> {
 	}
 	const win = windowCreate(session.repo.worktree);
 	const ours = win.webContents;
-	ipcRegister(ipcMain, session, (sender: WebContents) => sender === ours, log);
+	ipcRegister(
+		ipcMain,
+		() => session,
+		(sender: WebContents) => sender === ours,
+		log,
+	);
 	app.on("window-all-closed", () => {
 		// The window can only close mid-apply when forced; a hook still running would otherwise hold the session open.
 		session.cancel();

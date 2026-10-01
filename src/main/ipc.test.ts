@@ -46,13 +46,19 @@ function harness() {
 			return value;
 		};
 	const session = Object.fromEntries(Object.keys(NAMES).map((n) => [n, record(n, n === "resolve" ? { kind: "resolved" } : undefined)])) as unknown as SessionApi;
+	let current: SessionApi | undefined = session;
 	ipcRegister(
 		{
 			handle: (channel: string, handler: Handler) => {
 				handlers.set(channel, handler);
 			},
 		} as never,
-		session,
+		() => {
+			if (current === undefined) {
+				throw new Error("No repository is open");
+			}
+			return current;
+		},
 		(sender) => sender === ours,
 		() => undefined,
 	);
@@ -63,7 +69,10 @@ function harness() {
 		}
 		return handler({ sender: ours }, ...args);
 	};
-	return { handlers, calls, invoke };
+	const close = () => {
+		current = undefined;
+	};
+	return { handlers, calls, invoke, close };
 }
 
 describe("ipcRegister", () => {
@@ -74,6 +83,15 @@ describe("ipcRegister", () => {
 				.map((n) => apiChannel(n as keyof SuonetarApi))
 				.sort(),
 		);
+	});
+
+	it("calls whichever session is open at the time, and fails cleanly with none", async () => {
+		const { invoke, calls, close } = harness();
+		expect((await invoke("state")).ok).toBe(true);
+		close();
+		const result = await invoke("state");
+		expect(result.ok).toBe(false);
+		expect(calls.map(([name]) => name)).toEqual(["state"]);
 	});
 
 	it("refuses calls from any other page", async () => {

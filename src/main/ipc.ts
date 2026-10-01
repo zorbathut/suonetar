@@ -117,8 +117,13 @@ export type SessionApi = Pick<
 	| "cancel"
 >;
 
-// One handler per `SuonetarApi` method, each a single call into the session; calls from any page but ours are refused.
-export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, trusted: (sender: WebContents) => boolean, log: (message: string, err: unknown) => void): void {
+// One handler per `SuonetarApi` method, each a single call into the session open at the time; calls from any page but ours are refused.
+export function ipcRegister(
+	ipc: Pick<IpcMain, "handle">,
+	current: () => SessionApi,
+	trusted: (sender: WebContents) => boolean,
+	log: (message: string, err: unknown) => void,
+): void {
 	function handle<K extends keyof SuonetarApi>(name: K, fn: (args: readonly unknown[], sender: WebContents) => Promise<ApiValue<K>>): void {
 		ipc.handle(apiChannel(name), (event, ...args: unknown[]) =>
 			resultOf(() => {
@@ -129,14 +134,14 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 			}, log),
 		);
 	}
-	handle("state", () => session.state());
-	handle("generation", () => session.generation());
-	handle("commitDocument", (a) => session.commitDocument(argOid(a, 0)));
-	handle("draftDocument", (a) => session.draftDocument(argOid(a, 0)));
-	handle("blob", (a) => session.blob(argOid(a, 0)));
-	handle("blobAt", (a) => session.blobAt(argOid(a, 0), argString(a, 1)));
+	handle("state", () => current().state());
+	handle("generation", () => current().generation());
+	handle("commitDocument", (a) => current().commitDocument(argOid(a, 0)));
+	handle("draftDocument", (a) => current().draftDocument(argOid(a, 0)));
+	handle("blob", (a) => current().blob(argOid(a, 0)));
+	handle("blobAt", (a) => current().blobAt(argOid(a, 0), argString(a, 1)));
 	handle("draftSetFile", async (a) => {
-		await session.draftSetFile(argOid(a, 0), argString(a, 1), argBytesOrNull(a, 2));
+		await current().draftSetFile(argOid(a, 0), argString(a, 1), argBytesOrNull(a, 2));
 		return undefined;
 	});
 	handle("draftRestore", async (a) => {
@@ -144,29 +149,29 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 		if (from !== "commit" && from !== "parent") {
 			throw new ErrorIpcArgument("argument 2 is not commit or parent");
 		}
-		await session.draftRestore(argOid(a, 0), argString(a, 1), from);
+		await current().draftRestore(argOid(a, 0), argString(a, 1), from);
 		return undefined;
 	});
 	handle("draftSetMessage", async (a) => {
-		await session.draftSetMessage(argOid(a, 0), argBytesOrNull(a, 1) ?? undefined);
+		await current().draftSetMessage(argOid(a, 0), argBytesOrNull(a, 1) ?? undefined);
 		return undefined;
 	});
 	handle("draftDiscard", async (a) => {
-		await session.draftDiscard(argOid(a, 0));
+		await current().draftDiscard(argOid(a, 0));
 		return undefined;
 	});
 	handle("draftConfirm", async (a) => {
-		await session.draftConfirm(argOid(a, 0));
+		await current().draftConfirm(argOid(a, 0));
 		return undefined;
 	});
 	handle("draftAdopt", async (a) => {
-		await session.draftAdopt(argOid(a, 0));
+		await current().draftAdopt(argOid(a, 0));
 		return undefined;
 	});
-	handle("resolve", (a) => session.resolve(argInputs(a, 0), argString(a, 1), argChoices(a, 2)));
-	handle("preview", () => session.preview());
+	handle("resolve", (a) => current().resolve(argInputs(a, 0), argString(a, 1), argChoices(a, 2)));
+	handle("preview", () => current().preview());
 	handle("apply", (a, sender) =>
-		session.apply(argHooks(a, 0), (progress) => {
+		current().apply(argHooks(a, 0), (progress) => {
 			if (!sender.isDestroyed()) {
 				sender.send(APPLY_PROGRESS_CHANNEL, progress);
 			}
@@ -177,21 +182,21 @@ export function ipcRegister(ipc: Pick<IpcMain, "handle">, session: SessionApi, t
 		if (kind !== "exact" && kind !== "edits") {
 			throw new ErrorIpcArgument("argument 2 is not exact or edits");
 		}
-		return session.undo(argOid(a, 0), argOid(a, 1), kind);
+		return current().undo(argOid(a, 0), argOid(a, 1), kind);
 	});
-	handle("worktreeStatus", () => session.worktreeStatus());
+	handle("worktreeStatus", () => current().worktreeStatus());
 	handle("worktreeDocument", (a) => {
 		const side = a[0];
 		if (side !== "staged" && side !== "unstaged") {
 			throw new ErrorIpcArgument("argument 0 is not staged or unstaged");
 		}
-		return session.worktreeDocument(side);
+		return current().worktreeDocument(side);
 	});
-	handle("indentation", (a) => session.indentation(argOid(a, 0), argString(a, 1)));
-	handle("mergetoolName", () => session.mergetoolName());
-	handle("mergetool", (a) => session.mergetool(argInputs(a, 0), argString(a, 1), argString(a, 2), bytes(a[3], "argument 3")));
+	handle("indentation", (a) => current().indentation(argOid(a, 0), argString(a, 1)));
+	handle("mergetoolName", () => current().mergetoolName());
+	handle("mergetool", (a) => current().mergetool(argInputs(a, 0), argString(a, 1), argString(a, 2), bytes(a[3], "argument 3")));
 	handle("cancel", async () => {
-		session.cancel();
+		current().cancel();
 		return undefined;
 	});
 }
