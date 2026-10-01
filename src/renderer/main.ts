@@ -1,6 +1,7 @@
 import "./style.css";
+import type { PublishResult } from "../engine/apply.ts";
 import type { HookChoice } from "../engine/session.ts";
-import type { ApiValue } from "../shared/api.ts";
+import type { ApiValue, Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { Autosave } from "./autosave.ts";
 import { CommitView, type CommitViewHost } from "./commit-view.ts";
@@ -37,6 +38,7 @@ type View =
 	| { readonly kind: "blocked" };
 
 type SessionState = ApiValue<"state">;
+type PublishFailure = Wire<Exclude<PublishResult, { kind: "published" }>>;
 
 let ready: Ready | undefined;
 let generationSeen: string | undefined;
@@ -460,6 +462,34 @@ function applyWarnings(steps: readonly { readonly oid: string; readonly rewrite:
 	].filter((w) => w !== "");
 }
 
+// Reports a branch move that did not happen; `what` says what was attempted ("Not applied").
+async function publishFailureShow(outcome: PublishFailure, what: string): Promise<void> {
+	switch (outcome.kind) {
+		case "refused":
+			statusSet(`${what}: ${outcome.reason}`, "error");
+			return;
+		case "locked":
+			statusSet(`${what}: the index is locked (${outcome.lockPath}, ${Math.round(outcome.ageSeconds)} s old). Another git command may be running; try again.`, "error");
+			return;
+		case "moved": {
+			const files = outcome.unreverted.length === 0 ? "" : ` These files have changes suonetar did not make and were left as they are: ${outcome.unreverted.join(", ")}.`;
+			statusSet(`${what}: ${outcome.reason}.${files}`, "error");
+			await refresh();
+			return;
+		}
+		case "busy":
+			statusSet(`${what}: another apply is running on this repository.`, "error");
+			return;
+		case "interrupted":
+			await refresh();
+			return;
+		default: {
+			const never: never = outcome;
+			throw new Error(`unknown publish result ${String(never)}`);
+		}
+	}
+}
+
 async function hookShow(stop: HookStop): Promise<void> {
 	const message = stop.kind === "hook-failed" ? "pre-commit stopped the apply; nothing was changed." : `pre-commit could not be run; nothing was changed: ${stop.message}`;
 	// Leaving the previous hook view would forget the skips this retry was made with.
@@ -575,22 +605,11 @@ async function applyRun(hooks: HookChoice): Promise<void> {
 			statusSet("Nothing to apply.", "info");
 			return;
 		case "refused":
-			statusSet(`Not applied: ${outcome.reason}`, "error");
-			return;
 		case "locked":
-			statusSet(`Not applied: the index is locked (${outcome.lockPath}, ${Math.round(outcome.ageSeconds)} s old). Another git command may be running; try again.`, "error");
-			return;
-		case "moved": {
-			const files = outcome.unreverted.length === 0 ? "" : ` These files have changes suonetar did not make and were left as they are: ${outcome.unreverted.join(", ")}.`;
-			statusSet(`Not applied: ${outcome.reason}.${files}`, "error");
-			await refresh();
-			return;
-		}
+		case "moved":
 		case "busy":
-			statusSet("Not applied: another apply is running on this repository.", "error");
-			return;
 		case "interrupted":
-			await refresh();
+			await publishFailureShow(outcome, "Not applied");
 			return;
 		case "drafts-need-attention":
 			statusSet("Some edits need a decision first (listed under the stack).", "error");
