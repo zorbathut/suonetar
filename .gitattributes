@@ -1,0 +1,2 @@
+# LF everywhere, so the formatter passes on a Windows checkout whatever core.autocrlf says.
+* text=auto eol=lf
