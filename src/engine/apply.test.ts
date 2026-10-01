@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { renameRetrying } from "./apply.ts";
 import { draftWithFile } from "./drafts.ts";
 import type { Oid } from "./git.ts";
 import { CatFile } from "./objects.ts";
@@ -357,5 +358,33 @@ describe("apply", () => {
 		expect(await s.apply({ kind: "run", skip: [] }, () => undefined)).toMatchObject({ kind: "moved", unreverted: [] });
 		expect(disk("a.txt")).toBe(lineSet(lines("a"), 2, "c1"));
 		expect(existsSync(join(fx.dir, "added"))).toBe(false);
+	});
+});
+
+describe("renameRetrying", () => {
+	const failing = (code: string, times: number) => {
+		const calls: string[] = [];
+		const rename = (from: string, to: string) => {
+			calls.push(`${from}>${to}`);
+			if (calls.length <= times) {
+				throw Object.assign(new Error(code), { code });
+			}
+		};
+		return { calls, rename };
+	};
+
+	test("retries while another process holds the target, as git does", async () => {
+		const { calls, rename } = failing("EPERM", 2);
+		await renameRetrying("lock", "index", rename);
+		expect(calls).toEqual(["lock>index", "lock>index", "lock>index"]);
+	});
+
+	test("gives up with the error after about a second, and at once on any other error", async () => {
+		const held = failing("EACCES", 1000);
+		await expect(renameRetrying("lock", "index", held.rename)).rejects.toMatchObject({ code: "EACCES" });
+		expect(held.calls.length).toBeGreaterThan(3);
+		const missing = failing("ENOENT", 1000);
+		await expect(renameRetrying("lock", "index", missing.rename)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(missing.calls.length).toBe(1);
 	});
 });

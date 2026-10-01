@@ -1,6 +1,6 @@
-import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
-import { pidAlive } from "./apply.ts";
+import { pidAlive, renameRetrying } from "./apply.ts";
 import { ErrorGit } from "./errors.ts";
 import type { GitResult, HookResult, Oid, Repo } from "./git.ts";
 
@@ -34,7 +34,7 @@ export class WorktreePrivate {
 	static async acquire(repo: Repo, head: Oid): Promise<WorktreePrivate | "busy"> {
 		const dir = join(repo.commonDir, "suonetar");
 		mkdirSync(dir, { recursive: true });
-		const lock = lockTake(join(dir, "wt.lock"));
+		const lock = await lockTake(join(dir, "wt.lock"));
 		if (lock === undefined) {
 			return "busy";
 		}
@@ -118,7 +118,7 @@ function uniqueSuffix(): string {
 }
 
 // Takes the lock file, holding our pid, or returns undefined while another live process holds it. The file is linked into place already written, so it is never seen empty. A lock left by a process that no longer runs (or by this one, whose passes the session mutex serialises) is taken over.
-function lockTake(path: string): LockHeld | undefined {
+async function lockTake(path: string): Promise<LockHeld | undefined> {
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const written = `${path}.${uniqueSuffix()}`;
 		writeFileSync(written, String(process.pid));
@@ -148,7 +148,7 @@ function lockTake(path: string): LockHeld | undefined {
 		// Stale: move it aside, and if what was moved is not what was judged stale (another process took over first), put that one back.
 		const aside = `${path}.stale.${uniqueSuffix()}`;
 		try {
-			renameSync(path, aside);
+			await renameRetrying(path, aside);
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code === "ENOENT") {
 				continue;

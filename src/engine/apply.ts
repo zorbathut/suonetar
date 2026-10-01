@@ -223,10 +223,10 @@ class LockHeld {
 	}
 
 	// Installs `content` as the new index through git's lockfile protocol: write the lock, rename it over the index. It is stamped `seconds`, when the index was made, not now: an index newer than the files it records would let a same-size edit made in their second pass as clean.
-	install(content: Buffer, indexPath: string, seconds: number): void {
+	async install(content: Buffer, indexPath: string, seconds: number): Promise<void> {
 		writeFileSync(this.fd, content);
 		futimesSync(this.fd, seconds, seconds);
-		renameSync(this.path, indexPath);
+		await renameRetrying(this.path, indexPath);
 		this.close();
 	}
 
@@ -241,6 +241,26 @@ class LockHeld {
 		if (!this.#closed) {
 			this.#closed = true;
 			closeSync(this.fd);
+		}
+	}
+}
+
+// Pauses between attempts, about a second in all.
+const RENAME_RETRY_MS = [1, 10, 20, 40, 80, 160, 320, 640];
+
+// Windows refuses to replace a file while another process has it open (a `git status` reading the index, a virus scanner); git retries its own renames for the same reason.
+export async function renameRetrying(from: string, to: string, rename: (from: string, to: string) => void = renameSync): Promise<void> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			rename(from, to);
+			return;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			const pause = RENAME_RETRY_MS[attempt];
+			if (pause === undefined || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) {
+				throw err;
+			}
+			await new Promise((r) => setTimeout(r, pause));
 		}
 	}
 }
@@ -359,7 +379,7 @@ async function publishLocked(repo: Repo, branch: string, oldTip: Oid, newTip: Oi
 		if (!lock.stillOurs()) {
 			return interrupted("index.lock was removed by another process before the new index could be installed");
 		}
-		lock.install(readFileSync(privateIndex), join(repo.gitDir, "index"), Math.floor(statSync(privateIndex).mtimeMs / 1000));
+		await lock.install(readFileSync(privateIndex), join(repo.gitDir, "index"), Math.floor(statSync(privateIndex).mtimeMs / 1000));
 		rmSync(privateIndex);
 		rmSync(intentFile);
 		return { kind: "published" };
