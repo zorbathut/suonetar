@@ -19,7 +19,8 @@
 		"smoke": "node src/cli/smoke.ts",
 		"app": "electron-vite preview --",
 		"dev": "electron-vite dev --",
-		"dist": "electron-vite build && electron-builder --publish never"
+		"dist": "electron-vite build && electron-builder --publish never",
+		"desktop": "node src/cli/desktop.ts"
 	},
 	"dependencies": {
 		"editorconfig": "^3.0.2"
