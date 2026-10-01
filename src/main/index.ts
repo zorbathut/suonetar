@@ -184,7 +184,6 @@ async function sessionOpen(path: string, base: string | undefined, parent: Brows
 
 async function main(): Promise<void> {
 	await app.whenReady();
-	app.setAboutPanelOptions({ applicationName: "Suonetar", applicationVersion: app.getVersion(), copyright: "Copyright © 2026 Ben Rog-Wilhelm" });
 	const args = argumentsRead(process.argv, app.isPackaged, process.env.INIT_CWD, process.cwd());
 	// Without a repository, or with one that cannot be opened, the window starts with none and File › Open Repository… picks one.
 	const initial = args.repo === undefined ? undefined : await sessionOpen(args.repo, args.base, undefined);
@@ -215,13 +214,26 @@ async function main(): Promise<void> {
 			.catch((err: unknown) => log("opening a repository failed", err));
 	};
 
+	// A message box on the window rather than the platform's About panel: GTK's cannot read the icon from inside app.asar, and from a checkout it opens as a separate "Electron" window.
+	const aboutShow = () => {
+		dialog
+			.showMessageBox(win, {
+				title: "About Suonetar",
+				message: `Suonetar ${app.getVersion()}`,
+				detail: "A commit-stack editor for plain git.\n\nCopyright © 2026 Ben Rog-Wilhelm. MIT license.",
+				icon: iconLoad().resize({ width: 64, height: 64 }),
+				buttons: ["Close"],
+			})
+			.catch((err: unknown) => log("showing About failed", err));
+	};
+
 	Menu.setApplicationMenu(
 		Menu.buildFromTemplate([
 			{
 				label: "&File",
 				submenu: [{ label: "&Open Repository…", accelerator: "CmdOrCtrl+O", click: repoChoose }, { type: "separator" }, { role: "quit" }],
 			},
-			{ label: "&Help", submenu: [{ label: "&About Suonetar", click: () => app.showAboutPanel() }] },
+			{ label: "&Help", submenu: [{ label: "&About Suonetar", click: aboutShow }] },
 		]),
 	);
 
