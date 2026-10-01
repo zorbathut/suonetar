@@ -107,7 +107,7 @@ export type HookPassInput = {
 	readonly signal: AbortSignal;
 };
 
-// Runs the pre-commit hook on every rewritten commit in stack order, as `git commit` would have run it on that commit (research §3.7, plan 03).
+// Runs the pre-commit hook on every rewritten commit in stack order, as `git commit` would have run it on that commit.
 export async function hooksPass(repo: Repo, wt: WorktreePrivate, input: HookPassInput): Promise<HookPassResult> {
 	const out: ReplayStep[] = [];
 	const changed: (HookCommit & { paths: string[] })[] = [];

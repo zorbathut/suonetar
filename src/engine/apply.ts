@@ -252,7 +252,7 @@ function indexCopy(from: string, to: string): void {
 	utimesSync(to, seconds, seconds);
 }
 
-// Moves the checked-out branch from oldTip to newTip and brings the main worktree and index along, under git's own index lock (research §3.2).
+// Moves the checked-out branch from oldTip to newTip and brings the main worktree and index along, under git's own index lock.
 export async function publish(repo: Repo, branch: string, oldTip: Oid, newTip: Oid, reflogMessage: string): Promise<PublishResult> {
 	const pending = intentCheck(repo);
 	if (pending) {

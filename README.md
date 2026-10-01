@@ -68,4 +68,4 @@ npm test        # Vitest; the engine tests drive real git
 - `src/shared`: types both sides of IPC use.
 - `src/renderer`: the UI, CodeMirror 6, no Node access.
 
-The design and its reasoning are in [docs/](docs/): the founding brief, the research notes and decisions, an early hostile review, and one plan per build slice. Coding standards are in `CLAUDE.md` and the files it includes.
+Planned work is in [docs/todo.md](docs/todo.md). Coding standards are in `CLAUDE.md` and the files it includes.

@@ -1,6 +1,6 @@
 # Recovering from an interrupted apply
 
-Suonetar publishes a rewritten stack under git's own index lock (see `research-2026-09-30.md` §3.2). Throughout, it keeps a record at `.git/suonetar/intent.json`, updated at every step:
+Suonetar publishes a rewritten stack under git's own index lock. Throughout, it keeps a record at `.git/suonetar/intent.json`, updated at every step:
 
 ```json
 { "branch": "refs/heads/feature", "oldTip": "<sha>", "newTip": "<sha>", "pid": 12345, "time": "...", "phase": "worktree-updated" }
