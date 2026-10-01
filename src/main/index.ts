@@ -19,7 +19,13 @@ function iconLoad(): NativeImage {
 	return icon;
 }
 
-function windowCreate(repoPath: string): BrowserWindow {
+type AppWindow = {
+	readonly win: BrowserWindow;
+	// Asks the page to save everything it holds; true once it has, or when no page is listening yet and so holds nothing.
+	readonly pageRelease: () => Promise<boolean>;
+};
+
+function windowCreate(repoPath: string): AppWindow {
 	const win = new BrowserWindow({
 		width: 1600,
 		height: 1000,
@@ -57,10 +63,28 @@ function windowCreate(repoPath: string): BrowserWindow {
 		}
 	});
 
-	// Closing asks the renderer to flush its saves; it answers true once everything is on disk (or the user chose to drop what could not be saved).
+	// Closing asks the page to flush its saves; it answers true once everything is on disk (or the user chose to drop what could not be saved).
 	let rendererListening = false;
-	let asking = false;
+	let asked: { readonly answer: Promise<boolean>; readonly reply: (ok: boolean) => void } | undefined;
 	let closing = false;
+	const askDrop = () => {
+		asked?.reply(false);
+		asked = undefined;
+	};
+	const pageRelease = (): Promise<boolean> => {
+		if (!rendererListening) {
+			return Promise.resolve(true);
+		}
+		if (asked === undefined) {
+			let reply: (ok: boolean) => void = () => undefined;
+			const answer = new Promise<boolean>((resolve) => {
+				reply = resolve;
+			});
+			asked = { answer, reply };
+			contents.send("suonetar:close-request");
+		}
+		return asked.answer;
+	};
 	ipcMain.on("suonetar:close-ready", (event) => {
 		if (event.sender === contents) {
 			rendererListening = true;
@@ -70,20 +94,18 @@ function windowCreate(repoPath: string): BrowserWindow {
 		if (event.sender !== contents) {
 			return;
 		}
-		asking = false;
-		if (ok === true) {
-			closing = true;
-			win.destroy();
-		}
+		asked?.reply(ok === true);
+		asked = undefined;
 	});
-	contents.on("did-start-loading", () => {
+	// A page that is replaced or crashes mid-question will never answer it; whatever asked does not go ahead. Not on starting to load: the old page can still refuse to unload.
+	contents.on("did-navigate", () => {
 		rendererListening = false;
-		asking = false;
+		askDrop();
 	});
 	contents.on("render-process-gone", (_event, details) => {
 		log("the page crashed; reloading it", details.reason);
 		rendererListening = false;
-		asking = false;
+		askDrop();
 		if (!win.isDestroyed()) {
 			contents.reload();
 		}
@@ -93,9 +115,13 @@ function windowCreate(repoPath: string): BrowserWindow {
 			return;
 		}
 		event.preventDefault();
-		if (!asking) {
-			asking = true;
-			contents.send("suonetar:close-request");
+		if (asked === undefined) {
+			void pageRelease().then((ok) => {
+				if (ok && !win.isDestroyed()) {
+					closing = true;
+					win.destroy();
+				}
+			});
 			return;
 		}
 		// Asked again while the page has not answered: it may be hung, so offer to close regardless.
@@ -121,7 +147,7 @@ function windowCreate(repoPath: string): BrowserWindow {
 	} else {
 		win.loadFile(join(import.meta.dirname, "../renderer/index.html")).catch((err: unknown) => log("loading the renderer failed", err));
 	}
-	return win;
+	return { win, pageRelease };
 }
 
 async function main(): Promise<void> {
@@ -137,7 +163,7 @@ async function main(): Promise<void> {
 		app.quit();
 		return;
 	}
-	const win = windowCreate(session.repo.worktree);
+	const { win } = windowCreate(session.repo.worktree);
 	const ours = win.webContents;
 	ipcRegister(
 		ipcMain,
