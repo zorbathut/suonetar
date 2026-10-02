@@ -3,6 +3,9 @@ import { Change, diff } from "@codemirror/merge";
 // Lines [a0, a1) of the original text against [b0, b1) of the new one: lines that differ, or a run a search found shared.
 type Region = { a0: number; a1: number; b0: number; b1: number };
 
+// Which alignment a search is for: the first, over lines exactly as they are, or the second, within a changed region, over lines stripped of whitespace.
+type Stage = "exact" | "loose";
+
 // What git's histogram search found in a region: a run of shared lines, only lines too frequent to anchor on, or nothing shared at all.
 type Lcs = { readonly kind: "match"; readonly match: Region; readonly work: number } | { readonly kind: "frequent" | "none"; readonly work: number };
 
@@ -17,8 +20,8 @@ type Side = {
 // What is left of one diff's budgets, which bound its work however many regions it has.
 type Budget = { histogram: number; pairing: number };
 
-// A diff in progress: its two sides, the numbering their lines share, and its budget.
-type Diffing = { readonly A: Side; readonly B: Side; readonly intern: (line: string) => number; readonly budget: Budget };
+// A diff in progress: its two sides, the numbering their lines share, which numbers are content-free lines, and its budget.
+type Diffing = { readonly A: Side; readonly B: Side; readonly intern: (line: string) => number; readonly junk: (id: number) => boolean; readonly budget: Budget };
 
 // A line as pairing compares it: its non-blank text, and that text's adjacent character pairs, sorted.
 type LineKey = { readonly text: string; readonly bigrams: Uint32Array };
@@ -76,8 +79,13 @@ function nonBlank(text: string): string {
 	return text.replace(/\s/g, "");
 }
 
-// The longest run of lines both sides of the region share, preferring runs of rarer lines: git's histogram search (find_lcs and try_lcs in xdiff/xhistogram.c), on half-open ranges.
-function lcsFind(A: Int32Array, B: Int32Array, r: Region): Lcs {
+// A line with no letter or digit, such as a brace, a blank line or `});`: it says nothing about which code it belongs to, so it never anchors an alignment by itself.
+function lineJunk(line: string): boolean {
+	return !/[\p{L}\p{N}]/u.test(line);
+}
+
+// The longest run of lines both sides of the region share, preferring runs of rarer lines: git's histogram search (find_lcs and try_lcs in xdiff/xhistogram.c), on half-open ranges. Unlike git's, a run of content-free lines alone is no match, and their counts don't make a run rarer. In the exact stage they are not shared lines at all, so a region only they hold together comes back as having none; in the loose stage they are, so such a region goes to Myers.
+function lcsFind(A: Int32Array, B: Int32Array, r: Region, junk: (id: number) => boolean, stage: Stage): Lcs {
 	// Each line's occurrences in A's side: how many, the first, and from each the next.
 	const records = new Map<number, { first: number; count: number }>();
 	const next = new Int32Array(r.a1 - r.a0).fill(-1);
@@ -99,6 +107,7 @@ function lcsFind(A: Int32Array, B: Int32Array, r: Region): Lcs {
 		}
 		return record.count;
 	};
+	const rarityOf = (id: number): number => (junk(id) ? Number.POSITIVE_INFINITY : countOf(id));
 
 	let work = r.a1 - r.a0;
 	let best: Region | undefined;
@@ -108,7 +117,7 @@ function lcsFind(A: Int32Array, B: Int32Array, r: Region): Lcs {
 		let jNext = j + 1;
 		work++;
 		const record = records.get(at(B, j));
-		if (record !== undefined) {
+		if (record !== undefined && (stage === "loose" || !junk(at(B, j)))) {
 			common = true;
 		}
 		// As git does, lines more frequent than the best match so far are not tried.
@@ -117,18 +126,21 @@ function lcsFind(A: Int32Array, B: Int32Array, r: Region): Lcs {
 			let bs = j;
 			let ae = i + 1;
 			let be = j + 1;
-			let rarity = countOf(at(A, i));
+			let rarity = rarityOf(at(A, i));
+			let content = !junk(at(A, i));
 			while (as > r.a0 && bs > r.b0 && A[as - 1] === B[bs - 1]) {
 				as--;
 				bs--;
 				work++;
+				content ||= !junk(at(A, as));
 				if (rarity > 1) {
-					rarity = Math.min(rarity, countOf(at(A, as)));
+					rarity = Math.min(rarity, rarityOf(at(A, as)));
 				}
 			}
 			while (ae < r.a1 && be < r.b1 && A[ae] === B[be]) {
+				content ||= !junk(at(A, ae));
 				if (rarity > 1) {
-					rarity = Math.min(rarity, countOf(at(A, ae)));
+					rarity = Math.min(rarity, rarityOf(at(A, ae)));
 				}
 				ae++;
 				be++;
@@ -140,7 +152,7 @@ function lcsFind(A: Int32Array, B: Int32Array, r: Region): Lcs {
 			}
 			// git starts from an empty match, which a single line beats only by occurring at most OCCURRENCES_MAX times.
 			const bestLength = best === undefined ? 1 : best.a1 - best.a0;
-			if (bestLength < ae - as || rarity < bestCount) {
+			if (content && (bestLength < ae - as || rarity < bestCount)) {
 				best = { a0: as, a1: ae, b0: bs, b1: be };
 				bestCount = rarity;
 			}
@@ -184,7 +196,7 @@ function editsFromTrace(trace: readonly Int32Array[], r: Region, end: { readonly
 	return edits.reverse();
 }
 
-// Myers' diff over a region's lines: where git falls back to it, no shared line being rare enough for histogram to anchor on, and for whatever is left once the histogram search has spent its budget. Done MYERS_EDITS_STEP edits at a time: when a step runs out, the edits up to the furthest point it reached stand, and the search starts again from there. The result is then no longer minimal, so its regions may share lines.
+// Myers' diff over a region's lines: where git falls back to it, no shared line being rare enough for histogram to anchor on, and for whatever is left once the histogram search has spent its budget. Done MYERS_EDITS_STEP edits at a time: when a step runs out, the edits up to the furthest point it reached stand, and the search starts again from there. The result is then no longer minimal, so its regions may share lines. It lines content-free lines up like any other, so where it takes over from histogram, braces anchor again.
 function regionsMyers(A: Int32Array, B: Int32Array, whole: Region): Region[] {
 	const found: Region[] = [];
 	for (let r = whole; r.a0 < r.a1 || r.b0 < r.b1; ) {
@@ -246,7 +258,7 @@ function regionsMyers(A: Int32Array, B: Int32Array, whole: Region): Region[] {
 }
 
 // The regions of `whole` whose lines differ, in order, by git's histogram diff (histogram_diff in xdiff/xhistogram.c), driven by a stack rather than recursion.
-function regionsFind(A: Int32Array, B: Int32Array, whole: Region, budget: Budget): Region[] {
+function regionsFind(A: Int32Array, B: Int32Array, whole: Region, budget: Budget, junk: (id: number) => boolean, stage: Stage): Region[] {
 	const found: Region[] = [];
 	const add = (regions: readonly Region[]) => {
 		for (const region of regions) {
@@ -265,7 +277,7 @@ function regionsFind(A: Int32Array, B: Int32Array, whole: Region, budget: Budget
 			add(regionsMyers(A, B, r));
 			continue;
 		}
-		const lcs = lcsFind(A, B, r);
+		const lcs = lcsFind(A, B, r, junk, stage);
 		budget.histogram -= lcs.work;
 		switch (lcs.kind) {
 			case "match": {
@@ -499,14 +511,14 @@ function changesUnlike(diffing: Diffing, r: Region, out: Change[]): void {
 
 // The changes within a changed region. Its lines are lined up again ignoring whitespace, so that re-indented lines pair exactly at any size; those are narrowed to what changed on them, and the rest go to pairing by likeness, which a single line on either side goes to directly.
 function changesWithin(diffing: Diffing, r: Region, out: Change[]): void {
-	const { A, B, intern, budget } = diffing;
+	const { A, B, intern, junk, budget } = diffing;
 	if (r.a1 - r.a0 <= 1 || r.b1 - r.b0 <= 1) {
 		changesUnlike(diffing, r, out);
 		return;
 	}
-	// Lines stripped of whitespace are numbered with a leading space, which no stripped line has, so they never share a number with a line as it is.
-	const loose = (side: Side, from: number, to: number) => Int32Array.from(side.lines.slice(from, to), (line) => intern(` ${nonBlank(line)}`));
-	const unlike = regionsFind(loose(A, r.a0, r.a1), loose(B, r.b0, r.b1), { a0: 0, a1: r.a1 - r.a0, b0: 0, b1: r.b1 - r.b0 }, budget);
+	// Lines stripped of whitespace are numbered with a leading space, which no stripped line has, so they never share a number with a line as it is. Content-free lines keep their whitespace: a brace's indentation is all that says which block it closes.
+	const loose = (side: Side, from: number, to: number) => Int32Array.from(side.lines.slice(from, to), (line) => (lineJunk(line) ? intern(line) : intern(` ${nonBlank(line)}`)));
+	const unlike = regionsFind(loose(A, r.a0, r.a1), loose(B, r.b0, r.b1), { a0: 0, a1: r.a1 - r.a0, b0: 0, b1: r.b1 - r.b0 }, budget, junk, "loose");
 	let i = r.a0;
 	let j = r.b0;
 	for (const local of [...unlike, { a0: r.a1 - r.a0, a1: r.a1 - r.a0, b0: r.b1 - r.b0, b1: r.b1 - r.b0 }]) {
@@ -548,7 +560,7 @@ function sideOf(text: string, intern: (line: string) => number): Side {
 	return { text, lines, offsets, ids: Int32Array.from(lines, intern) };
 }
 
-// The changes from `a` to `b`: lines lined up by git's histogram algorithm, then the lines in each changed region paired up and narrowed to the characters that differ. CodeMirror's own diff works on characters throughout, and on a large rewrite it gives up and marks everything from the first change to the last.
+// The changes from `a` to `b`: lines lined up by git's histogram algorithm (except that lines without content never anchor it), then again ignoring whitespace within each changed region, then paired up and narrowed to the characters that differ. CodeMirror's own diff works on characters throughout, and on a large rewrite it gives up and marks everything from the first change to the last.
 export function diffByLine(a: string, b: string): readonly Change[] {
 	if (a === b) {
 		return [];
@@ -558,14 +570,17 @@ export function diffByLine(a: string, b: string): readonly Change[] {
 		return [new Change(0, a.length, 0, b.length)];
 	}
 	const ids = new Map<string, number>();
+	const junkIds: boolean[] = [];
 	const intern = (line: string): number => {
 		let id = ids.get(line);
 		if (id === undefined) {
 			id = ids.size;
 			ids.set(line, id);
+			junkIds[id] = lineJunk(line);
 		}
 		return id;
 	};
+	const junk = (id: number) => junkIds[id] === true;
 	const A = sideOf(a, intern);
 	const B = sideOf(b, intern);
 
@@ -579,8 +594,8 @@ export function diffByLine(a: string, b: string): readonly Change[] {
 		suffix++;
 	}
 	const budget: Budget = { histogram: HISTOGRAM_WORK_MAX, pairing: PAIRING_WORK_MAX };
-	const regions = regionsSlide(A.ids, B.ids, regionsFind(A.ids, B.ids, { a0: prefix, a1: A.ids.length - suffix, b0: prefix, b1: B.ids.length - suffix }, budget));
-	const diffing: Diffing = { A, B, intern, budget };
+	const regions = regionsSlide(A.ids, B.ids, regionsFind(A.ids, B.ids, { a0: prefix, a1: A.ids.length - suffix, b0: prefix, b1: B.ids.length - suffix }, budget, junk, "exact"));
+	const diffing: Diffing = { A, B, intern, junk, budget };
 	const changes: Change[] = [];
 	for (const r of regions) {
 		changesWithin(diffing, r, changes);

@@ -119,12 +119,13 @@ function linesChanged(a: string, b: string, changes: readonly Change[]): { a: nu
 	return { a: [...new Set(changes.flatMap((c) => touched(a, c.fromA, c.toA)))], b: [...new Set(changes.flatMap((c) => touched(b, c.fromB, c.toB)))] };
 }
 
-// The first change that starts at an empty line on both sides apart from the change before it, or undefined. CodeMirror would take such a change to start a line later than it does.
+// The first pure insertion or deletion that starts at an empty line on both sides apart from the change before it, or undefined. CodeMirror would take such a change to start a line later than it does, and put its chunk out of step.
 function blankStartFault(a: string, b: string, changes: readonly Change[]): Change | undefined {
 	const blankAt = (text: string, pos: number) => pos > 0 && pos < text.length && text[pos] === "\n" && text[pos - 1] === "\n";
 	return changes.find((c, k) => {
 		const prev = changes[k - 1];
-		return blankAt(a, c.fromA) && blankAt(b, c.fromB) && (prev === undefined || (prev.toA < c.fromA && prev.toB < c.fromB));
+		const pure = c.fromA === c.toA || c.fromB === c.toB;
+		return pure && blankAt(a, c.fromA) && blankAt(b, c.fromB) && (prev === undefined || (prev.toA < c.fromA && prev.toB < c.fromB));
 	});
 }
 
@@ -143,84 +144,82 @@ describe("diffByLine", () => {
 		}
 	});
 
-	it("finds the lines git's histogram diff finds, where its Myers or patience diff would find others", () => {
-		// From `git diff --no-index --no-indent-heuristic --diff-algorithm=histogram -U0`.
+	it("finds the lines git's histogram diff finds", () => {
+		// From `git diff --no-index --no-indent-heuristic --diff-algorithm=histogram -U0`, on lines that all have content, which is where this follows git's histogram exactly.
 		const cases = [
 			{
-				a: ["", "if (x)", "{", "else", "", "{", "{", "}", "f3();", "else", "", "}", "", "return;", "{", "f7();", "f3();"],
-				b: ["", "if (x)", "{", "else", "", "{", "{", "}", "f3();", "else", "", "{", "return;", "f7();", "f3();"],
-				histogram: { a: [12, 13, 14], b: [13] },
+				a: ["if (x)", "x = 1;", "if (x)", "if (x)", "f4();", "f5();", "x = 1;", "if (x)", "f7();", "a();", "x = 1;", "f0();", "x = 1;", "a();", "if (x)", "f8();"],
+				b: ["if (x)", "b();", "if (x)", "else", "f5();", "f4();", "f7();", "a();", "x = 1;", "f0();", "x = 1;", "a();", "if (x)", "f8();"],
+				histogram: { a: [2, 4, 5, 7, 8], b: [2, 4, 6] },
 			},
 			{
-				a: ["else", "else", "else", "return;", "", "f2();", "}", "f6();", "f5();", "}", "}", "b();", "return;", "{", "else", "else", "f7();", "if (x)", "}"],
-				b: ["{", "return;", "else", "else", "else", "return;", "", "f2();", "}", "}", "f6();", "if (x)", "}", "b();", "return;", "{", "else", "else", "}"],
-				histogram: { a: [8, 9, 17, 18], b: [1, 2, 11, 12] },
+				a: ["f5();", "f8();", "if (x)", "if (x)", "else", "x = 1;", "f8();", "b();", "return;", "b();", "return;", "b();", "b();", "f2();", "x = 1;", "return;"],
+				b: ["f5();", "f4();", "f7();", "else", "if (x)", "if (x)", "else", "x = 1;", "f8();", "b();", "b();", "b();", "a();", "a();", "c();", "b();", "f6();"],
+				histogram: { a: [2, 9, 10, 11, 14, 15, 16], b: [2, 3, 4, 13, 14, 15, 16, 17] },
 			},
 			{
-				a: ["return;", "return;", "else", "f5();", "f4();", "f2();", "", "if (x)", "", "else", "}", "f0();"],
-				b: ["return;", "return;", "else", "f5();", "f4();", "f3();", "if (x)", "if (x)", "if (x)", "f4();", "", "else", "}", "{"],
-				histogram: { a: [6, 7, 12], b: [6, 8, 9, 10, 14] },
+				a: ["c();", "c();", "else", "f0();", "f4();", "b();", "x = 1;", "b();", "c();", "x = 1;", "else", "x = 1;", "b();", "x = 1;", "f7();"],
+				b: ["c();", "else", "f0();", "f4();", "b();", "if (x)", "c();", "b();", "x = 1;", "b();", "x = 1;", "else", "x = 1;", "b();", "x = 1;", "f7();"],
+				histogram: { a: [2, 9], b: [6, 7, 8] },
 			},
 			{
-				a: ["return;", "f0();", "b();", "f8();", "", "f0();", "return;", "}", "}", "{", "{", "return;", "b();", "return;", "return;", "{", "f4();", "a();", "", "return;", "f2();"],
-				b: ["return;", "f0();", "b();", "f8();", "b();", "if (x)", "", "f0();", "return;", "}", "{", "if (x)", "b();", "return;", "return;", "", "return;", "f2();"],
-				histogram: { a: [9, 11, 12, 16, 17, 18], b: [5, 6, 12] },
+				a: [
+					"f6();",
+					"else",
+					"return;",
+					"c();",
+					"if (x)",
+					"x = 1;",
+					"x = 1;",
+					"return;",
+					"f7();",
+					"x = 1;",
+					"x = 1;",
+					"if (x)",
+					"b();",
+					"f6();",
+					"if (x)",
+					"return;",
+					"a();",
+					"f4();",
+					"if (x)",
+					"f2();",
+				],
+				b: ["f6();", "else", "return;", "c();", "if (x)", "x = 1;", "x = 1;", "else", "x = 1;", "f6();", "if (x)", "return;", "a();", "f4();", "if (x)", "f2();"],
+				histogram: { a: [8, 9, 11, 12, 13], b: [8] },
+			},
+			// Here every occurrence of a line has to be tried, and a line occurring twice must still anchor.
+			{
+				a: ["b();", "if (x)", "if (x)", "b();", "if (x)", "if (x)", "x = 1;", "f3();", "f2();", "f1();", "f8();", "f0();", "c();", "f8();", "return;"],
+				b: ["if (x)", "b();", "f5();", "if (x)", "x = 1;", "f3();", "f2();", "f1();", "f8();", "f0();", "c();", "f8();", "return;"],
+				histogram: { a: [1, 2, 5], b: [3] },
 			},
 			// Here the rarer of two equally long matches has to win.
 			{
 				a: [
-					"f8();",
-					"}",
-					"else",
-					"f3();",
+					"return;",
+					"f5();",
+					"a();",
+					"if (x)",
 					"b();",
+					"if (x)",
 					"return;",
 					"f7();",
-					"{",
-					"{",
-					"f0();",
-					"f1();",
-					"b();",
-					"b();",
-					"{",
-					"b();",
-					"f3();",
-					"a();",
-					"",
 					"else",
-					"}",
-					"return;",
-					"return;",
-					"return;",
-				],
-				b: [
-					"f8();",
-					"}",
+					"c();",
+					"c();",
+					"f4();",
+					"f5();",
+					"x = 1;",
 					"else",
-					"f3();",
-					"b();",
-					"return;",
-					"f7();",
-					"{",
-					"{",
-					"f0();",
-					"f1();",
-					"b();",
-					"b();",
-					"{",
-					"b();",
-					"f3();",
-					"a();",
-					"",
-					"b();",
-					"",
-					"return;",
-					"}",
-					"else",
+					"f4();",
+					"c();",
+					"x = 1;",
 					"f2();",
-					"return;",
+					"else",
 				],
-				histogram: { a: [19, 21, 22], b: [19, 20, 21, 23, 24] },
+				b: ["return;", "f5();", "a();", "return;", "f7();", "c();", "else", "b();", "return;", "f5();", "f4();", "c();", "x = 1;", "f2();", "else"],
+				histogram: { a: [4, 5, 6, 10, 11, 12, 14, 15], b: [6, 8, 9] },
 			},
 		];
 		for (const { a, b, histogram } of cases) {
@@ -236,6 +235,10 @@ describe("diffByLine", () => {
 			const [as, bs] = [a.join("\n"), b.join("\n")];
 			expect(changesFault(as, bs, diffByLine(as, bs)), JSON.stringify({ a, b })).toBeUndefined();
 			expect(blankStartFault(as, bs, diffByLine(as, bs)), JSON.stringify({ a, b })).toBeUndefined();
+			expect(
+				diffByLine(as, bs).find((c) => as.slice(c.fromA, c.toA) === bs.slice(c.fromB, c.toB)),
+				JSON.stringify({ a, b }),
+			).toBeUndefined();
 			// Without the last line break too.
 			expect(changesFault(`${as}\n`, bs, diffByLine(`${as}\n`, bs)), JSON.stringify({ a, b })).toBeUndefined();
 		}
@@ -303,12 +306,99 @@ describe("diffByLine", () => {
 		expect(changedLength(diffByLine(as, bs))).toEqual({ a: first.length + 1 + 5 * 6, b: last.length + 1 });
 	});
 
+	it("still narrows a rename on each line of a body, across its braces", () => {
+		const a = ["void F()", "{", "    if (Godot.Input.IsKeyPressed(1))", "    {", "        Godot.GD.Print(1);", "    }", "    Godot.GD.Print(2);", "}"];
+		const b = a.map((line) => line.replaceAll("Godot.", ""));
+		const [as, bs] = [a.join("\n"), b.join("\n")];
+		const changes = diffByLine(as, bs);
+		expect(changes.every((c) => !as.slice(c.fromA, c.toA).includes("\n") && !bs.slice(c.fromB, c.toB).includes("\n"))).toBe(true);
+		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG)).toHaveLength(3);
+	});
+
+	it("keeps lines with content matched rather than a longer run of braces", () => {
+		// Each content-free line occurs once, so the longer run is tried as an anchor.
+		const a = ["    {", "    (", "    [", "real();", "other();"];
+		const b = ["real();", "other();", "    {", "    (", "    ["];
+		const [as, bs] = [`${a.join("\n")}\n`, `${b.join("\n")}\n`];
+		expect(linesChanged(as, bs, diffByLine(as, bs))).toEqual({ a: [1, 2, 3], b: [3, 4, 5] });
+	});
+
+	it("doesn't let a content-free line make a run of common lines look rare", () => {
+		// The run `x = 1;` `});` is longer than `unique();`, but only its brace is rare; `unique();` should anchor.
+		const a = ["unique();", "x = 1;", "});", "x = 1;", "x = 1;", "x = 1;", "x = 1;"];
+		const b = ["x = 1;", "});", "unique();"];
+		const [as, bs] = [`${a.join("\n")}\n`, `${b.join("\n")}\n`];
+		expect(linesChanged(as, bs, diffByLine(as, bs))).toEqual({ a: [2, 3, 4, 5, 6, 7], b: [1, 2] });
+	});
+
 	it("narrows a line left alone between paired lines, however much it grew", () => {
 		const a = ["{", "    total = a;", "    print(total);", "}"];
 		const b = ["{", "    total = a + b + c + d + e + f + g + h;", "    print(totals);", "}"];
 		const [as, bs] = [a.join("\n"), b.join("\n")];
 		const [first] = diffByLine(as, bs);
 		expect(first && [first.fromA === first.toA, bs.slice(first.fromB, first.toB)]).toEqual([true, " + b + c + d + e + f + g + h"]);
+	});
+
+	it("keeps the braces that close a block where they are when a nested block is inserted before them", () => {
+		const a = ["class C", "{", "    void F()", "    {", "        x();", "    }", "}", "// end v1"];
+		const b = ["class C", "{", "    void F()", "    {", "        x();", "        if (y)", "        {", "            z();", "        }", "    }", "}", "// end v2"];
+		const [as, bs] = [a.join("\n"), b.join("\n")];
+		// The block goes in whole before the closing braces, which stay as they are rather than being matched to the new block's at another depth.
+		const changes = diffByLine(as, bs).map((c) => [as.slice(c.fromA, c.toA), bs.slice(c.fromB, c.toB)]);
+		expect(changes).toEqual([
+			["", "        if (y)\n        {\n            z();\n        }\n"],
+			["1", "2"],
+		]);
+	});
+
+	it("lines a wrapped block up with its original, changing its lines only in indentation", () => {
+		const a = ["class C", "{", "    void F()", "    {", "        if (a)", "        {", "            x();", "        }", "    }", "}"];
+		const b = [
+			"class C",
+			"{",
+			"    void F()",
+			"    {",
+			"        if (b)",
+			"        {",
+			"            if (a)",
+			"            {",
+			"                x();",
+			"            }",
+			"        }",
+			"    }",
+			"}",
+		];
+		const [as, bs] = [a.join("\n"), b.join("\n")];
+		const changes = diffByLine(as, bs);
+		const kept = (side: string, from: number, to: number) => side.slice(from, to).replace(/\s/g, "");
+		expect(changes.map((c) => kept(as, c.fromA, c.toA)).join("")).toBe("");
+		expect(changes.map((c) => kept(bs, c.fromB, c.toB)).join("")).toBe("if(b){}");
+	});
+
+	it("leaves code that stayed put out of the chunks when a block above it is pulled out and re-indented", () => {
+		const a = ["Control Build()", "{", "    return Panel(", "        Title(", '            "Name",', "            Close()", "        ),", "        Body(content)", "    );", "}"];
+		const b = [
+			"Control Build()",
+			"{",
+			"    var title = Title(",
+			'        "Name",',
+			"        Close()",
+			"    );",
+			"    return Panel(",
+			"        title,",
+			"        Body(content)",
+			"    );",
+			"}",
+		];
+		const [ta, tb] = [Text.of(a), Text.of(b)];
+		const covered = new Set(
+			Chunk.build(ta, tb, CONFIG).flatMap((c) =>
+				c.toB > c.fromB ? Array.from({ length: tb.lineAt(c.endB).number - tb.lineAt(c.fromB).number + 1 }, (_, k) => tb.lineAt(c.fromB).number + k) : [],
+			),
+		);
+		for (const line of [7, 9, 10]) {
+			expect(covered.has(line), `line ${line}: ${b[line - 1]}`).toBe(false);
+		}
 	});
 
 	it("narrows a changed word to the word", () => {
