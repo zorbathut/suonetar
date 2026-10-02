@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { intentCheck, type PublishResult, preflightPosition, publish } from "./apply.ts";
-import { type CommitBasics, type DraftStatus, draftConfirmed, draftMessage, draftsResolve, draftWithEntry, draftWithFile, draftWithMessage, editability } from "./drafts.ts";
+import { type CommitBasics, type DraftStatus, draftConfirmed, draftFor, draftMessage, draftsResolve, draftVersion, editability, treeWithEntry, treeWithFile } from "./drafts.ts";
 import { type Indentation, indentationFor } from "./editorconfig.ts";
 import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
 import { fileReaderDisk, gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
@@ -25,7 +25,7 @@ export type SessionState =
 export type StepSummary = { readonly oid: Oid; readonly subject: string; readonly rewrite: boolean; readonly empty: boolean; readonly dropsSignature: boolean };
 
 export type ConflictReport = {
-	readonly commit: CommitBasics & { readonly parent: Oid };
+	readonly commit: Omit<CommitBasics, "parentTree"> & { readonly parent: Oid };
 	readonly inputs: MergeInputs;
 	readonly markerTree: Oid;
 	readonly conflicts: readonly (Conflict & { readonly resolved: boolean })[];
@@ -223,7 +223,7 @@ export class Session {
 			try {
 				const stack = await this.#stackRead();
 				const store = await storeRead(this.repo, this.#cat);
-				const drafts = await draftsResolve(this.repo, stack, store.drafts);
+				const drafts = await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts);
 				return { kind: "ready", stack, drafts, undo: await this.#undoInfo(stack, drafts) };
 			} catch (err) {
 				if (err instanceof ErrorNotOnBranch || err instanceof ErrorNoBase) {
@@ -281,7 +281,8 @@ export class Session {
 			const store = await storeRead(this.repo, this.#cat);
 			const existing = store.drafts.get(oid);
 			const branch = await this.#draftBranch(existing, path);
-			const next = await draftWithFile(this.repo, branch, commit, existing, path, content);
+			const tree = await treeWithFile(this.repo, existing?.tree ?? commit.tree, commit.tree, path, content);
+			const next = draftFor(commit, branch, tree === commit.tree ? undefined : { tree, parentTree: commit.parentTree }, existing ? draftMessage(existing) : undefined);
 			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
 		});
 	}
@@ -290,17 +291,12 @@ export class Session {
 	draftRestore(oid: Oid, path: string, from: "commit" | "parent"): Promise<void> {
 		return this.#mutex.run(async () => {
 			const commit = await this.#basics(oid);
-			let source = commit.tree;
-			if (from === "parent") {
-				const parent = (await this.#commit(oid)).parents[0];
-				if (parent === undefined) {
-					throw new ErrorStale(`the parent of ${oid.slice(0, 12)}`);
-				}
-				source = (await commitRead(this.#cat, parent)).tree;
-			}
+			const source = from === "parent" ? commit.parentTree : commit.tree;
 			const store = await storeRead(this.repo, this.#cat);
 			const existing = store.drafts.get(oid);
-			const next = await draftWithEntry(this.repo, await this.#draftBranch(existing, path), commit, existing, path, source);
+			const branch = await this.#draftBranch(existing, path);
+			const tree = await treeWithEntry(this.repo, existing?.tree ?? commit.tree, path, source);
+			const next = draftFor(commit, branch, tree === commit.tree ? undefined : { tree, parentTree: commit.parentTree }, existing ? draftMessage(existing) : undefined);
 			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
 		});
 	}
@@ -310,7 +306,7 @@ export class Session {
 			const commit = await this.#basics(oid);
 			const store = await storeRead(this.repo, this.#cat);
 			const existing = store.drafts.get(oid);
-			const next = draftWithMessage(await this.#draftBranch(existing, "(message)"), commit, existing, message);
+			const next = draftFor(commit, await this.#draftBranch(existing, "(message)"), existing === undefined ? undefined : draftVersion(existing, commit), message);
 			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
 		});
 	}
@@ -325,7 +321,7 @@ export class Session {
 		return this.#mutex.run(async () => {
 			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
-			const status = (await draftsResolve(this.repo, stack, store.drafts)).find((s) => s.draft.meta.against === against);
+			const status = (await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts)).find((s) => s.draft.meta.against === against);
 			if (status?.kind !== "rebased") {
 				throw new ErrorStale(`a rebased draft for ${against.slice(0, 12)}`);
 			}
@@ -484,7 +480,7 @@ export class Session {
 			}
 			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
-			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, store.drafts)));
+			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts)));
 			const info = assessed?.info;
 			if (info === undefined || info.kind === "unavailable" || info.old !== old || info.new !== newTip || info.kind !== kind || assessed?.pairing === undefined) {
 				return info?.kind === "unavailable" ? { kind: "unavailable", reason: info.reason } : { kind: "stale" };
@@ -628,7 +624,8 @@ export class Session {
 	async #plan(): Promise<{ stack: Stack; preview: PreviewResult; steps?: readonly ReplayStep[]; applied: DraftEntry[] }> {
 		const stack = await this.#stackRead();
 		const store = await storeRead(this.repo, this.#cat);
-		const statuses = await draftsResolve(this.repo, stack, store.drafts);
+		const baseTree = await this.#baseTree(stack);
+		const statuses = await draftsResolve(this.repo, stack, baseTree, store.drafts);
 		const blocking = statuses.filter((s) => s.kind === "rebased" || s.kind === "conflict");
 		if (blocking.length > 0) {
 			return { stack, preview: { kind: "drafts-need-attention", drafts: blocking }, applied: [] };
@@ -636,7 +633,6 @@ export class Session {
 		const current = statuses.filter((s): s is Extract<DraftStatus, { kind: "current" }> => s.kind === "current");
 		const edits = new Map<Oid, Edit>(current.map((s) => [s.commit.oid, s.edit]));
 		const resolutions = new Map([...store.resolutions].map(([key, r]) => [key, r.changes]));
-		const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
 		const result = await replayTrees(this.repo, stack.commits, baseTree, edits, resolutions);
 		const applied = current.map((s) => s.draft);
 		if (result.kind === "conflict") {
@@ -732,9 +728,18 @@ export class Session {
 		return commitParse(oid, obj.data);
 	}
 
+	// Any commit, in the stack or not, with its parent's tree.
 	async #basics(oid: Oid): Promise<CommitBasics> {
 		const info = await this.#commit(oid);
-		return { oid, tree: info.tree, authorLine: info.authorLine, subject: commitSubject(info), message: info.message };
+		const parent = info.parents[0];
+		if (parent === undefined) {
+			throw new ErrorStale(`the parent of ${oid.slice(0, 12)}`);
+		}
+		return { oid, tree: info.tree, authorLine: info.authorLine, subject: commitSubject(info), message: info.message, parentTree: (await commitRead(this.#cat, parent)).tree };
+	}
+
+	async #baseTree(stack: Stack): Promise<Oid> {
+		return (await commitRead(this.#cat, stack.baseOid)).tree;
 	}
 
 	// A commit's stored draft, unless it belongs to another branch: that one is shown and adopted separately, never blended into this branch's view.

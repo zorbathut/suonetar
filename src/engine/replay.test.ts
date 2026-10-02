@@ -8,6 +8,11 @@ import { type Stack, stackRead } from "./stack.ts";
 import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
 import { blobWrite, type TreeChange, treeWithChanges } from "./write.ts";
 
+// An edit made on the commit's original parent.
+function edit(tree: Oid | undefined, message: Buffer | undefined = undefined): Edit {
+	return { tree, parentTree: undefined, message };
+}
+
 describe("replay", () => {
 	let fx: Fixture;
 	let cat: CatFile;
@@ -46,7 +51,7 @@ describe("replay", () => {
 		fx.commit("c2", { "a.txt": lineSet(lineSet(lines("a"), 2, "c1"), 8, "c2") });
 		const stack = await stackRead(fx.repo, cat, undefined);
 		const edited = await fileEdit(c1, "a.txt", lineSet(lineSet(lines("a"), 2, "c1"), 5, "edit"));
-		const result = await replay(stack, new Map([[c1, { tree: edited, message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(edited)]]));
 		expect(result.kind).toBe("clean");
 		if (result.kind !== "clean") {
 			return;
@@ -62,7 +67,7 @@ describe("replay", () => {
 		fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		const c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const result = await replay(stack, new Map([[c2, { tree: await fileEdit(c2, "b.txt", "new\n"), message: undefined }]]));
+		const result = await replay(stack, new Map([[c2, edit(await fileEdit(c2, "b.txt", "new\n"))]]));
 		expect(result.kind === "clean" && result.steps.map((s) => s.rewrite)).toEqual([false, true]);
 	});
 
@@ -71,7 +76,7 @@ describe("replay", () => {
 		fx.commit("c2", { "b.txt": "y\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
 		const same = (await commitRead(cat, c1)).tree;
-		const result = await replay(stack, new Map([[c1, { tree: same, message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(same)]]));
 		expect(result.kind === "clean" && result.steps.every((s) => !s.rewrite)).toBe(true);
 	});
 
@@ -79,7 +84,7 @@ describe("replay", () => {
 		const c1 = fx.commit("c1", { "a.txt": "x\n" });
 		fx.commit("c2", { "b.txt": "y\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const result = await replay(stack, new Map([[c1, { tree: undefined, message: Buffer.from("reworded\n") }]]));
+		const result = await replay(stack, new Map([[c1, edit(undefined, Buffer.from("reworded\n"))]]));
 		if (result.kind !== "clean") {
 			throw new Error("expected clean");
 		}
@@ -93,7 +98,7 @@ describe("replay", () => {
 		const c2 = fx.commit("c2", { "a.txt": lineSet(lines("a"), 5, "c2") });
 		fx.commit("c3", { "b.txt": "c3\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const edits = new Map([[c1, { tree: await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited")), message: undefined }]]);
+		const edits = new Map([[c1, edit(await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited")))]]);
 		const conflicted = await replay(stack, edits);
 		if (conflicted.kind !== "conflict") {
 			throw new Error("expected conflict");
@@ -121,15 +126,15 @@ describe("replay", () => {
 		const c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 5, "c1") });
 		const c2 = fx.commit("c2", { "a.txt": lineSet(lines("a"), 5, "c2") });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const edits = new Map<Oid, Edit>([[c1, { tree: await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited")), message: undefined }]]);
+		const edits = new Map<Oid, Edit>([[c1, edit(await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited")))]]);
 		const first = await replay(stack, edits);
 		if (first.kind !== "conflict") {
 			throw new Error("expected conflict");
 		}
 		const resolutions = new Map([[first.conflicts[0]?.key as string, [{ path: "a.txt", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from("resolved\n")) }]]]);
-		edits.set(c2, { tree: await fileEdit(c2, "b.txt", "unrelated draft on c2\n"), message: undefined });
+		edits.set(c2, edit(await fileEdit(c2, "b.txt", "unrelated draft on c2\n")));
 		expect((await replay(stack, edits, resolutions)).kind).toBe("clean");
-		edits.set(c2, { tree: await fileEdit(c2, "a.txt", lineSet(lines("a"), 5, "c2 edited again")), message: undefined });
+		edits.set(c2, edit(await fileEdit(c2, "a.txt", lineSet(lines("a"), 5, "c2 edited again"))));
 		expect((await replay(stack, edits, resolutions)).kind).toBe("conflict");
 	});
 
@@ -140,7 +145,7 @@ describe("replay", () => {
 		const stack = await stackRead(fx.repo, cat, undefined);
 		let tree = await fileEdit(c1, "b.txt", lineSet(lines("b"), 1, "edited"));
 		tree = await treeWithChanges(fx.repo, tree, [{ path: "bin.dat", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from("\0edited")) }]);
-		const result = await replay(stack, new Map([[c1, { tree, message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(tree)]]));
 		if (result.kind !== "conflict") {
 			throw new Error("expected conflict");
 		}
@@ -150,12 +155,34 @@ describe("replay", () => {
 		expect(byPath["bin.dat"]?.kind).toBe("structural");
 	});
 
+	test("an edit made on top of an edited parent takes only the parent's later changes", async () => {
+		const c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
+		const c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
+		const stack = await stackRead(fx.repo, cat, undefined);
+		// c2's edit was made with c1 already showing "first"; c1 has since moved on to "second".
+		const first = await fileEdit(c1, "a.txt", lineSet(lineSet(lines("a"), 2, "c1"), 5, "first"));
+		const second = await fileEdit(c1, "a.txt", lineSet(lineSet(lines("a"), 2, "c1"), 5, "second"));
+		const onFirst = await treeWithChanges(fx.repo, first, [{ path: "b.txt", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from(lineSet(lines("b"), 2, "c2 edited"))) }]);
+		const result = await replay(
+			stack,
+			new Map([
+				[c1, edit(second)],
+				[c2, { tree: onFirst, parentTree: first, message: undefined }],
+			]),
+		);
+		if (result.kind !== "clean") {
+			throw new Error("expected clean");
+		}
+		expect(await show(result.steps[1]?.tree as Oid, "a.txt")).toBe(lineSet(lineSet(lines("a"), 2, "c1"), 5, "second").trimEnd());
+		expect(await show(result.steps[1]?.tree as Oid, "b.txt")).toBe(lineSet(lines("b"), 2, "c2 edited").trimEnd());
+	});
+
 	test("a commit whose change is already below becomes empty and is kept", async () => {
 		const c1 = fx.commit("c1", { "a.txt": "one\n" });
 		fx.commit("c2", { "b.txt": "two\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
 		const tree = await treeWithChanges(fx.repo, (await commitRead(cat, c1)).tree, [{ path: "b.txt", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from("two\n")) }]);
-		const result = await replay(stack, new Map([[c1, { tree, message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(tree)]]));
 		expect(result.kind === "clean" && result.steps.map((s) => s.empty)).toEqual([false, true]);
 	});
 
@@ -164,8 +191,8 @@ describe("replay", () => {
 		const c2 = fx.commit("c2", { "a.txt": lineSet(lineSet(lines("a"), 2, "c1"), 8, "c2") });
 		const stack = await stackRead(fx.repo, cat, undefined);
 		const edits = new Map([
-			[c1, { tree: await fileEdit(c1, "a.txt", lineSet(lineSet(lines("a"), 2, "c1"), 4, "edit1")), message: undefined }],
-			[c2, { tree: await fileEdit(c2, "a.txt", lineSet(lineSet(lineSet(lines("a"), 2, "c1"), 8, "c2"), 10, "edit2")), message: undefined }],
+			[c1, edit(await fileEdit(c1, "a.txt", lineSet(lineSet(lines("a"), 2, "c1"), 4, "edit1")))],
+			[c2, edit(await fileEdit(c2, "a.txt", lineSet(lineSet(lineSet(lines("a"), 2, "c1"), 8, "c2"), 10, "edit2")))],
 		]);
 		const result = await replay(stack, edits);
 		if (result.kind !== "clean") {
@@ -187,7 +214,7 @@ describe("replay", () => {
 		rmSync(join(fx.dir, ".gitattributes"));
 		const stack = await stackRead(fx.repo, cat, undefined);
 		const edited = await fileEdit(c1, "list.txt", "one\nedited\n");
-		const result = await replay(stack, new Map([[c1, { tree: edited, message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(edited)]]));
 		expect(result.kind).toBe("clean");
 		const plain = await fx.repo.run(["merge-tree", "--write-tree", `--merge-base=${fx.git("rev-parse", `${c1}^{tree}`)}`, edited, fx.git("rev-parse", `${c2}^{tree}`)], {
 			cwd: fx.dir,
@@ -205,7 +232,7 @@ describe("replay", () => {
 		const c1 = fx.commit("after", { "a.txt": "after\n" });
 		fx.commit("after2", { "b.txt": "after2\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const result = await replay(stack, new Map([[c1, { tree: await fileEdit(c1, "a.txt", "edited\n"), message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(await fileEdit(c1, "a.txt", "edited\n"))]]));
 		if (result.kind !== "clean") {
 			throw new Error("expected clean");
 		}
@@ -219,7 +246,7 @@ describe("replay", () => {
 		const c1 = fx.commit("c1\n\nbody\n", { "a.txt": "x\n" });
 		fx.commit("c2", { "b.txt": "y\n" });
 		const stack = await stackRead(fx.repo, cat, undefined);
-		const result = await replay(stack, new Map([[c1, { tree: await fileEdit(c1, "a.txt", "z\n"), message: undefined }]]));
+		const result = await replay(stack, new Map([[c1, edit(await fileEdit(c1, "a.txt", "z\n"))]]));
 		if (result.kind !== "clean") {
 			throw new Error("expected clean");
 		}

@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, stat
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { renameRetrying } from "./apply.ts";
-import { draftWithFile } from "./drafts.ts";
+import { draftFor, treeWithFile } from "./drafts.ts";
 import type { Oid } from "./git.ts";
 import { CatFile } from "./objects.ts";
 import { Session } from "./session.ts";
@@ -237,8 +237,16 @@ describe("apply", () => {
 			try {
 				const store = await storeRead(fx.repo, cat);
 				const existing = store.drafts.get(c2);
-				const commit = { oid: c2, tree: fx.git("rev-parse", `${c2}^{tree}`), authorLine: existing?.meta.authorLine ?? "", subject: "c2", message: Buffer.from("c2\n") };
-				const next = await draftWithFile(fx.repo, "refs/heads/feature", commit, existing, "b.txt", Buffer.from("later edit\n"));
+				const commit = {
+					oid: c2,
+					tree: fx.git("rev-parse", `${c2}^{tree}`),
+					parentTree: fx.git("rev-parse", `${c2}^^{tree}`),
+					authorLine: existing?.meta.authorLine ?? "",
+					subject: "c2",
+					message: Buffer.from("c2\n"),
+				};
+				const tree = await treeWithFile(fx.repo, existing?.tree ?? commit.tree, commit.tree, "b.txt", Buffer.from("later edit\n"));
+				const next = draftFor(commit, "refs/heads/feature", { tree, parentTree: commit.parentTree }, undefined);
 				await storeWrite(fx.repo, store, new Map([[c2, next as DraftEntry]]), store.resolutions);
 			} finally {
 				cat.close();

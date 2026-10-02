@@ -174,8 +174,8 @@ export async function undoDrafts(repo: Repo, cat: CatFile, branch: string, pairi
 	for (const { x, y } of pairing.pairs) {
 		const merged = await mergeTrees(repo, yParent, xParent, y.tree);
 		const tree = merged.kind === "clean" ? merged.tree : y.tree;
-		const basics: CommitBasics = { oid: x.oid, tree: x.tree, authorLine: x.authorLine, subject: commitSubject(x), message: x.message };
-		const draft = draftFor(basics, branch, tree, y.message);
+		const basics: CommitBasics = { oid: x.oid, tree: x.tree, authorLine: x.authorLine, subject: commitSubject(x), message: x.message, parentTree: xParent };
+		const draft = draftFor(basics, branch, tree === x.tree ? undefined : { tree, parentTree: xParent }, y.message);
 		if (draft !== undefined) {
 			drafts.push(draft);
 		}

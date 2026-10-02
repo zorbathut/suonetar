@@ -21,8 +21,11 @@ export type DraftEntry = {
 	readonly meta: DraftMeta;
 	// The edited tree; undefined for a message-only draft.
 	readonly tree: Oid | undefined;
-	// The `against` commit's tree, kept so the draft can be rebased and shown even after that commit is gone.
+	// The parent tree `tree` was made on top of; undefined for a message-only draft, and for drafts written before parent trees were recorded, which were all made on the commit's original parent.
+	readonly parentTree: Oid | undefined;
+	// The `against` commit's tree and its parent's, kept so the draft can be rebased and shown even after that commit is gone; `baseParent` is undefined where `parentTree` is.
 	readonly base: Oid;
+	readonly baseParent: Oid | undefined;
 	// The entry's own tree in the store, compared to detect concurrent changes; undefined until written.
 	readonly entryOid: Oid | undefined;
 };
@@ -90,7 +93,8 @@ export async function storeRead(repo: Repo, cat: CatFile): Promise<Store> {
 			throw new Error(`malformed draft entry ${dir.name} in ${STORE_REF}`);
 		}
 		const parsed = (await readJson(cat, meta.oid)) as DraftMeta;
-		drafts.set(parsed.against, { meta: parsed, tree: entries.find((e) => e.name === "tree")?.oid, base: base.oid, entryOid: dir.oid });
+		const named = (name: string) => entries.find((e) => e.name === name)?.oid;
+		drafts.set(parsed.against, { meta: parsed, tree: named("tree"), parentTree: named("parent"), base: base.oid, baseParent: named("baseParent"), entryOid: dir.oid });
 	}
 	const resolutions = new Map<string, ResolutionEntry>();
 	const resolutionsDir = root.find((e) => e.name === "resolutions");
@@ -115,8 +119,15 @@ export async function storeWrite(repo: Repo, previous: Store, drafts: ReadonlyMa
 			{ mode: "100644", type: "blob", oid: await blobJson(repo, draft.meta), name: "meta" },
 			{ mode: "040000", type: "tree", oid: draft.base, name: "base" },
 		];
-		if (draft.tree !== undefined) {
-			entries.push({ mode: "040000", type: "tree", oid: draft.tree, name: "tree" });
+		const trees: [string, Oid | undefined][] = [
+			["tree", draft.tree],
+			["parent", draft.parentTree],
+			["baseParent", draft.baseParent],
+		];
+		for (const [name, oid] of trees) {
+			if (oid !== undefined) {
+				entries.push({ mode: "040000", type: "tree", oid, name });
+			}
 		}
 		draftDirs.push({ mode: "040000", type: "tree", oid: await treeMake(repo, entries), name: against });
 	}

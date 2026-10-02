@@ -3,8 +3,8 @@ import { type Conflict, mergeTrees } from "./merge.ts";
 import type { StackCommit } from "./stack.ts";
 import { commitWrite, type TreeChange, treeWithChanges } from "./write.ts";
 
-// The desired new version of one stack commit.
-export type Edit = { readonly tree: Oid | undefined; readonly message: Buffer | undefined };
+// The desired new version of one stack commit: `tree` on top of a parent whose tree is `parentTree` (undefined: the commit's original parent), or the commit's own tree when `tree` is undefined.
+export type Edit = { readonly tree: Oid | undefined; readonly parentTree: Oid | undefined; readonly message: Buffer | undefined };
 
 export type ReplayStep = {
 	readonly commit: StackCommit;
@@ -42,11 +42,12 @@ export async function replayTrees(
 	for (const commit of commits) {
 		const edit = edits.get(commit.oid);
 		const theirs = edit?.tree ?? commit.tree;
+		const base = edit?.tree === undefined ? oldParentTree : (edit.parentTree ?? oldParentTree);
 		let tree: Oid;
-		if (newParentTree === oldParentTree) {
+		if (newParentTree === base) {
 			tree = theirs;
 		} else {
-			const inputs = { base: oldParentTree, ours: newParentTree, theirs };
+			const inputs = { base, ours: newParentTree, theirs };
 			const merged = await mergeTrees(repo, inputs.base, inputs.ours, inputs.theirs);
 			if (merged.kind === "clean") {
 				tree = merged.tree;
