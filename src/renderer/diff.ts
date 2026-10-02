@@ -453,7 +453,7 @@ function linesPairEnds(linesA: readonly string[], linesB: readonly string[]): { 
 	return [...Array.from({ length: top }, (_, k) => ({ i: k, j: k })), ...Array.from({ length: bottom }, (_, k) => ({ i: n - bottom + k, j: m - bottom + k }))];
 }
 
-// The changes within lines that differ even ignoring whitespace: paired by likeness (or from each end, when there are too many to weigh), each pair narrowed to characters, and lines that pair with none shown whole. A single line against a single line is narrowed directly, since it can pair with nothing else.
+// The changes within lines that differ even ignoring whitespace: paired by likeness (or from each end, when there are too many to weigh), each pair narrowed to characters, and lines that pair with none shown whole, except a single line left on each side, which can only be one changed into the other and is narrowed too.
 function changesUnlike(diffing: Diffing, r: Region, out: Change[]): void {
 	const { A, B, budget } = diffing;
 	const charsOf = (i: number, j: number) => {
@@ -484,7 +484,9 @@ function changesUnlike(diffing: Diffing, r: Region, out: Change[]): void {
 	let i = r.a0;
 	let j = r.b0;
 	for (const p of [...local.map((q) => ({ i: r.a0 + q.i, j: r.b0 + q.j })), { i: r.a1, j: r.b1 }]) {
-		if (i < p.i || j < p.j) {
+		if (p.i - i === 1 && p.j - j === 1) {
+			charsOf(i, j);
+		} else if (i < p.i || j < p.j) {
 			out.push(new Change(at(A.offsets, i), at(A.offsets, p.i), at(B.offsets, j), at(B.offsets, p.j)));
 		}
 		if (p.i < r.a1) {

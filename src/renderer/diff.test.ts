@@ -303,6 +303,14 @@ describe("diffByLine", () => {
 		expect(changedLength(diffByLine(as, bs))).toEqual({ a: first.length + 1 + 5 * 6, b: last.length + 1 });
 	});
 
+	it("narrows a line left alone between paired lines, however much it grew", () => {
+		const a = ["{", "    total = a;", "    print(total);", "}"];
+		const b = ["{", "    total = a + b + c + d + e + f + g + h;", "    print(totals);", "}"];
+		const [as, bs] = [a.join("\n"), b.join("\n")];
+		const [first] = diffByLine(as, bs);
+		expect(first && [first.fromA === first.toA, bs.slice(first.fromB, first.toB)]).toEqual([true, " + b + c + d + e + f + g + h"]);
+	});
+
 	it("narrows a changed word to the word", () => {
 		const a = "class X\n{\n    int count = 3;\n}\n";
 		const b = "class X\n{\n    int amount = 3;\n}\n";
