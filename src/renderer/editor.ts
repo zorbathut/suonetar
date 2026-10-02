@@ -8,6 +8,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
 import type { Indentation } from "../engine/editorconfig.ts";
 import type { Wire } from "../shared/api.ts";
+import { diffByLine } from "./diff.ts";
 import { editorIndentExtension } from "./indentation.ts";
 import { wrapIndented } from "./wrap-indent.ts";
 
@@ -73,6 +74,8 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 				mergeControls: spec.editable ? mergeControl : false,
 				collapseUnchanged: { margin: 3, minSize: 6 },
 				syntaxHighlightDeletions: true,
+				// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
+				diffConfig: { override: diffByLine },
 			}),
 		);
 	}
