@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers } from "./conflicts.ts";
+import { conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers, conflictsCombine } from "./conflicts.ts";
 
 const MERGE = "a\n<<<<<<< ours\nB1\n=======\nB2\n>>>>>>> theirs\nc\n";
 const DIFF3 = "a\n<<<<<<< ours\nB1\n||||||| base\nb\n=======\nB2\nB3\n>>>>>>> theirs\nc\n";
@@ -86,5 +86,48 @@ describe("conflictRelabel", () => {
 		const oid = "787558af46a74e2a52f18d49487b61593283e9ba";
 		const text = `<<<<<<< ${oid}\nsee ${oid}\n=======\ny\n>>>>>>> other\n`;
 		expect(conflictRelabelMarkers(text, new Map([[oid, "below"]]))).toBe(`<<<<<<< below\nsee ${oid}\n=======\ny\n>>>>>>> other\n`);
+	});
+});
+
+describe("conflictsCombine", () => {
+	const base = "## Fixed\n* one\n* two\n\n## Older\n";
+
+	it("makes a reworded line and a line added right after it together, as git will not", () => {
+		const ours = "## Fixed\n* one\n* two, reworded\n\n## Older\n";
+		const theirs = "## Fixed\n* one\n* two\n* three\n\n## Older\n";
+		expect(conflictsCombine(base, ours, theirs)).toBe("## Fixed\n* one\n* two, reworded\n* three\n\n## Older\n");
+		expect(conflictsCombine(base, theirs, ours)).toBe("## Fixed\n* one\n* two, reworded\n* three\n\n## Older\n");
+	});
+
+	it("puts a line added just before a reworded line before it", () => {
+		const ours = "## Fixed\n* one\n* two, reworded\n\n## Older\n";
+		const theirs = "## Fixed\n* one\n* new\n* two\n\n## Older\n";
+		expect(conflictsCombine(base, ours, theirs)).toBe("## Fixed\n* one\n* new\n* two, reworded\n\n## Older\n");
+	});
+
+	it("refuses changes to the same line, and two additions in the same place", () => {
+		expect(conflictsCombine(base, "## Fixed\n* one\n* two A\n\n## Older\n", "## Fixed\n* one\n* two B\n\n## Older\n")).toBeUndefined();
+		expect(conflictsCombine(base, "## Fixed\n* one\n* two\n* A\n\n## Older\n", "## Fixed\n* one\n* two\n* B\n\n## Older\n")).toBeUndefined();
+	});
+
+	it("refuses an addition inside lines the other side replaces", () => {
+		const ours = "## Fixed\n* ONE AND TWO\n\n## Older\n";
+		const theirs = "## Fixed\n* one\n* between\n* two\n\n## Older\n";
+		expect(conflictsCombine(base, ours, theirs)).toBeUndefined();
+	});
+
+	it("makes a change both sides made once", () => {
+		const both = "## Fixed\n* one\n* two, reworded\n\n## Older\n";
+		expect(conflictsCombine(base, both, "## Fixed\n* zero\n* one\n* two, reworded\n\n## Older\n")).toBe("## Fixed\n* zero\n* one\n* two, reworded\n\n## Older\n");
+	});
+
+	it("keeps line endings, and a last line without one", () => {
+		const crlf = "a\r\nb\r\nc";
+		expect(conflictsCombine(crlf, "A\r\nb\r\nc", "a\r\nb\r\nC")).toBe("A\r\nb\r\nC");
+	});
+
+	it("lines repeated in the file still line up with the change around them", () => {
+		const repeated = "x\n}\n}\ny\n}\n";
+		expect(conflictsCombine(repeated, "x2\n}\n}\ny\n}\n", "x\n}\n}\ny2\n}\n")).toBe("x2\n}\n}\ny2\n}\n");
 	});
 });

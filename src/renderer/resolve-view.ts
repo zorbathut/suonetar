@@ -5,7 +5,7 @@ import type { ConflictReport, MergetoolOutcome, ResolutionChoice } from "../engi
 import type { Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { type TextCodec, textDecode, textEncode, textShow } from "./codec.ts";
-import { type BlockChoice, conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers } from "./conflicts.ts";
+import { type BlockChoice, conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers, conflictsCombine } from "./conflicts.ts";
 import { ask, button, el } from "./dom.ts";
 import { editorCreate } from "./editor.ts";
 import { imageElement, imageType } from "./image.ts";
@@ -314,6 +314,15 @@ export class ResolveView {
 			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField], indentation });
 			update();
 			const actions = el("span", { class: "actions" });
+			const combined = await this.#combined(record, path);
+			if (combined !== undefined) {
+				actions.append(
+					button("Combine both changes", () => {
+						view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: combined }, userEvent: "input.combine" });
+						status.textContent = `${path}: both changes made together, as the two sides only touch. Check it, then Save resolution.`;
+					}),
+				);
+			}
 			const tool = this.#tool;
 			if (tool !== undefined) {
 				actions.append(button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)));
@@ -359,6 +368,18 @@ export class ResolveView {
 				}
 			},
 		};
+	}
+
+	// Both sides' changes to `path` made together, when they only touch (see `conflictsCombine`); undefined when they overlap, or a side is missing or not text.
+	async #combined(record: Record, path: string): Promise<string | undefined> {
+		const text = async (stage: 1 | 2 | 3): Promise<string | undefined> => {
+			const oid = record.stages[path]?.find((s) => s.stage === stage)?.oid;
+			const bytes = oid === undefined ? undefined : await call(api.blob(oid));
+			const decoded = bytes === undefined ? undefined : textDecode(bytes);
+			return decoded?.kind === "text" ? decoded.text : undefined;
+		};
+		const [base, ours, theirs] = [await text(1), await text(2), await text(3)];
+		return base === undefined || ours === undefined || theirs === undefined ? undefined : conflictsCombine(base, ours, theirs);
 	}
 
 	// Hands the path to the merge tool, starting from the editor's text, and puts the tool's result into the editor for review; Save resolution still stores it.

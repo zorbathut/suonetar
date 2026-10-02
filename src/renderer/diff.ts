@@ -1,7 +1,7 @@
 import { Change, diff } from "@codemirror/merge";
 
 // Lines [a0, a1) of the original text against [b0, b1) of the new one: lines that differ, or a run a search found shared.
-type Region = { a0: number; a1: number; b0: number; b1: number };
+export type Region = { a0: number; a1: number; b0: number; b1: number };
 
 // Which alignment a search is for: the first, over lines exactly as they are, or the second, within a changed region, over lines stripped of whitespace.
 type Stage = "exact" | "loose";
@@ -63,7 +63,7 @@ function at(xs: ArrayLike<number>, i: number): number {
 }
 
 // The text's lines, each with its line break; the last has none when the text does not end in one.
-function linesSplit(text: string): string[] {
+export function linesSplit(text: string): string[] {
 	const lines: string[] = [];
 	for (let start = 0; ; ) {
 		const end = text.indexOf("\n", start);
@@ -605,6 +605,28 @@ function sideOf(text: string, intern: (line: string) => number): Side {
 		offsets[i + 1] = at(offsets, i) + line.length;
 	});
 	return { text, lines, offsets, ids: Int32Array.from(lines, intern) };
+}
+
+// The lines of `a` and `b`, each with its line break, and the ranges of them that differ, as git's histogram diff finds them (with content-free lines anchoring like any other) and slides them: hunks for merging, which should line up as git's would rather than read well.
+export function diffLines(a: string, b: string): { readonly a: readonly string[]; readonly b: readonly string[]; readonly regions: readonly Region[] } {
+	const ids = new Map<string, number>();
+	const intern = (line: string): number => {
+		let id = ids.get(line);
+		if (id === undefined) {
+			id = ids.size;
+			ids.set(line, id);
+		}
+		return id;
+	};
+	const A = sideOf(a, intern);
+	const B = sideOf(b, intern);
+	const budget: Budget = { histogram: HISTOGRAM_WORK_MAX, pairing: PAIRING_WORK_MAX };
+	const regions = regionsSlide(
+		A.ids,
+		B.ids,
+		regionsFind(A.ids, B.ids, { a0: 0, a1: A.ids.length, b0: 0, b1: B.ids.length }, budget, () => false, "exact"),
+	);
+	return { a: A.lines, b: B.lines, regions };
 }
 
 // The changes from `a` to `b`: lines lined up by git's histogram algorithm (except that lines without content never anchor it), then again ignoring whitespace within each changed region, then paired up and narrowed to the characters that differ, with rewritten lines that only content-free lines separate joined into one change. CodeMirror's own diff works on characters throughout, and on a large rewrite it gives up and marks everything from the first change to the last.
