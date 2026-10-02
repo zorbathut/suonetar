@@ -462,9 +462,9 @@ textarea.message {
 	text-indent: min(var(--wrap-indent, 0ch), 50cqw) hanging;
 }
 
-/* The button floats over the top right of a deleted chunk, or of the line after a chunk that only inserts; that line wraps short of it rather than under it. */
+/* The button floats over the top right of a deleted chunk, or, when a chunk shows no deleted lines (it only inserts, or is shown inline), of its first line; that line wraps short of it rather than under it. */
 .cm-deletedChunk > .cm-chunkButtons + .cm-deletedLine,
-.cm-deletedChunk:not(:has(.cm-deletedLine)) + .cm-line {
+.cm-deletedChunk:has(.cm-chunkButtons):not(:has(.cm-deletedLine)) + .cm-line {
 	padding-right: 110px;
 }
 

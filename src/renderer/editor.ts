@@ -74,6 +74,7 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 				mergeControls: spec.editable ? mergeControl : false,
 				collapseUnchanged: { margin: 3, minSize: 6 },
 				syntaxHighlightDeletions: true,
+				allowInlineDiffs: true,
 				// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
 				diffConfig: { override: diffByLine },
 			}),
