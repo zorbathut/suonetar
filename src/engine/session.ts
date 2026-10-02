@@ -1,34 +1,62 @@
 import { createHash } from "node:crypto";
-import { intentCheck, type PublishResult, preflightPosition, publish } from "./apply.ts";
-import { type CommitBasics, type DraftStatus, draftConfirmed, draftFor, draftMessage, draftsResolve, draftVersion, editability, treeWithEntry, treeWithFile } from "./drafts.ts";
+import { readdirSync, rmSync } from "node:fs";
+import { hostname } from "node:os";
+import { join } from "node:path";
+import { intentCheck, type PublishResult, pidAlive, preflightPosition, publish } from "./apply.ts";
+import { type DerivedCommit, type DeriveTrees, derivedSteps, type Edit, type MergeInputs, stackDerive, treeRestacked, treeTakingPaths } from "./derive.ts";
+import {
+	type CommitBasics,
+	type DraftStatus,
+	draftConfirmed,
+	draftFor,
+	draftMessage,
+	draftsResolve,
+	draftVersion,
+	editability,
+	treeWithEntry,
+	treeWithFile,
+	type Version,
+} from "./drafts.ts";
 import { type Indentation, indentationFor } from "./editorconfig.ts";
-import { ErrorEditRefused, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
-import { fileReaderDisk, gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen } from "./git.ts";
+import { ErrorEditRefused, ErrorEditStale, ErrorGit, ErrorNoBase, ErrorNotOnBranch, ErrorStale, ErrorStoreChanged } from "./errors.ts";
+import { fileReaderDisk, gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type Repo, repoOpen, repoWithObjects } from "./git.ts";
 import { type HookCache, type HookCommit, type HookFailure, type HookPassResult, type HookProgress, hookIdentity, hooksPass } from "./hooks.ts";
-import { type Conflict, mergeTrees } from "./merge.ts";
+import { type Conflict, type MergeResult, mergeTrees } from "./merge.ts";
 import { type MergetoolResult, mergetoolName, mergetoolRun } from "./mergetool.ts";
-import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff } from "./objects.ts";
-import { type Edit, type MergeInputs, type ReplayStep, replayCommit, replayTrees, stepsReflag } from "./replay.ts";
-import { branchCurrent, configGet, type Stack, stackRead } from "./stack.ts";
+import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff, treeList } from "./objects.ts";
+import { type ReplayStep, replayCommit, stepsReflag } from "./replay.ts";
+import { branchCurrent, configGet, type Stack, type StackCommit, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
 import { reflogMessage, type UndoInfo, undoAssess, undoDrafts } from "./undo.ts";
 import { type WorktreeSide, type WorktreeStatus, worktreeFiles, worktreeStatus } from "./worktree-changes.ts";
 import { WorktreePrivate } from "./worktree-private.ts";
-import { blobWrite, signingWanted } from "./write.ts";
+import { blobWrite, signingWanted, treeWithChanges } from "./write.ts";
+
+// What becomes of one stack commit at Apply, as the stack list shows it.
+export type CommitStatus = {
+	readonly oid: Oid;
+	// "edited": the user changed it; "resolved": a conflict in it was resolved; "rewritten": only restacked onto changes below.
+	readonly kind: "unchanged" | "rewritten" | "edited" | "resolved" | "conflict";
+	// Paths this commit shows without the edits below them, because a conflict below is unresolved; the lowest such conflict is `conflictBelow`.
+	readonly provisional: readonly string[];
+	readonly conflictBelow: Oid | undefined;
+};
 
 export type SessionState =
-	// `undo` describes undoing the branch's last Suonetar move, when there is one.
-	| { readonly kind: "ready"; readonly stack: Stack; readonly drafts: readonly DraftStatus[]; readonly undo: UndoInfo | undefined }
+	// `undo` describes undoing the branch's last Suonetar move, when there is one. `commits` matches `stack.commits`, oldest first.
+	| { readonly kind: "ready"; readonly stack: Stack; readonly drafts: readonly DraftStatus[]; readonly undo: UndoInfo | undefined; readonly commits: readonly CommitStatus[] }
 	| { readonly kind: "unavailable"; readonly reason: string }
 	| Extract<PublishResult, { kind: "interrupted" }>;
 
 export type StepSummary = { readonly oid: Oid; readonly subject: string; readonly rewrite: boolean; readonly empty: boolean; readonly dropsSignature: boolean };
 
 export type ConflictReport = {
-	readonly commit: Omit<CommitBasics, "parentTree"> & { readonly parent: Oid };
+	readonly commit: CommitBasics & { readonly parent: Oid };
 	readonly inputs: MergeInputs;
 	readonly markerTree: Oid;
 	readonly conflicts: readonly (Conflict & { readonly resolved: boolean })[];
+	// The commit's own side includes the user's edits to it or an earlier resolution, not just the commit as it was.
+	readonly edited: boolean;
 };
 
 export type PreviewResult =
@@ -84,18 +112,27 @@ export type DocumentFile = {
 	readonly binary: boolean;
 	// Why the file cannot be edited as text, or undefined when it can.
 	readonly refusal: string | undefined;
-	// Contents at the parent, at the commit, and with the draft; undefined where the file does not exist, or when `tooLarge`.
+	// Contents at the parent, at the commit without the user's edits, and as shown (with them); undefined where the file does not exist, or when `tooLarge`. For a commit in the stack, all three are as restacked onto the edits below.
 	readonly parent: Buffer | undefined;
 	readonly commit: Buffer | undefined;
 	readonly draft: Buffer | undefined;
+	// The blob shown as `draft`, which a save names to say what it changes; undefined where the file does not exist.
+	readonly draftOid: Oid | undefined;
 	readonly tooLarge: boolean;
 	// From EditorConfig, as of the version shown (the parent's, for a file that version deletes).
 	readonly indentation: Indentation;
+	// `commit` is the commit's original version rather than a restacked one, since restacking it conflicts, so the user's edits cannot be told apart from that.
+	readonly mineUnknown: boolean;
+	// Shown without the edits below it, because a conflict below is unresolved.
+	readonly provisional: boolean;
 };
 
 export type CommitDocument = {
 	readonly oid: Oid;
 	readonly parent: Oid;
+	// The parent tree the document shows the commit on, which a save names, and the commit's tree as shown.
+	readonly parentTree: Oid;
+	readonly tree: Oid;
 	readonly subject: string;
 	readonly message: Buffer;
 	readonly draftMessage: Buffer | undefined;
@@ -115,6 +152,10 @@ export type ResolveResult = { readonly kind: "resolved" } | { readonly kind: "in
 const BLOB_LIMIT = 4 * 1024 * 1024;
 // Uncommitted files shown, and stat-ed per poll, at most: an agent's `npm install` into an unignored directory would otherwise flood both.
 const WORKTREE_FILES_MAX = 2000;
+// Merge results a session remembers per repository, at most; past that it starts over.
+const MERGES_REMEMBERED_MAX = 10_000;
+// The private object directories of sessions, each named for its machine and process: `objects-<host>-<pid>-<random>`.
+const OBJECTS_PATTERN = /^objects-(.+)-(\d+)-[0-9a-z]+$/;
 
 // Serialises every operation on a repository, across all sessions in this process: an autosave landing in the middle of an apply must not interleave with it.
 class Mutex {
@@ -143,21 +184,74 @@ function draftsHere(drafts: readonly DraftStatus[]): boolean {
 	return drafts.some((d) => d.kind !== "elsewhere");
 }
 
+function inputsEqual(a: MergeInputs, b: MergeInputs): boolean {
+	return a.base === b.base && a.ours === b.ours && a.theirs === b.theirs;
+}
+
+// This machine's name as it can stand in a directory name.
+function hostName(): string {
+	return hostname().replace(/[^0-9A-Za-z.]/g, "_");
+}
+
+// Removes the private object directories of sessions whose process is gone. Only this machine's processes can be checked; a repository shared with another machine keeps that machine's.
+function objectsSweep(dir: string): void {
+	let names: string[];
+	try {
+		names = readdirSync(dir);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+			return;
+		}
+		throw err;
+	}
+	for (const name of names) {
+		const [, host, pid] = OBJECTS_PATTERN.exec(name) ?? [];
+		if (host === hostName() && pid !== undefined && !pidAlive(Number(pid))) {
+			rmSync(join(dir, name), { recursive: true, force: true });
+		}
+	}
+}
+
+// The stack restacked onto every edit, with what it was computed from.
+type Derivation = {
+	readonly stack: Stack;
+	readonly store: Store;
+	readonly baseTree: Oid;
+	readonly statuses: readonly DraftStatus[];
+	readonly commits: readonly DerivedCommit[];
+};
+
+type Current = Extract<DraftStatus, { kind: "current" }>;
+
+// Where an edit to a commit lands: the version of its files it changes, and the commit's own tree restacked onto that version's parent (`restacked` false when that conflicts, so the tree is only a stand-in).
+type EditTarget = { readonly commit: CommitBasics; readonly version: Version; readonly unedited: Oid; readonly restacked: boolean };
+
 export class Session {
 	readonly repo: Repo;
+	// The repository with new objects going to a private directory, for merges made only to show the restacked stack; everything stored is written through `repo` instead.
+	readonly #view: Repo;
+	readonly #objects: string;
 	// The base chosen on the command line, which wins over `suonetar.base` and detection.
 	readonly #base: string | undefined;
 	readonly #cat: CatFile;
 	readonly #mutex: Mutex;
 	readonly #hookCache: HookCache = new Map();
+	// Merge results and conflict stand-ins by merge settings and inputs, for the repository and for `#view`: an edit changes only the commits above it, so most of a derivation repeats the last one.
+	readonly #merges = new Map<Repo, Map<string, MergeResult | Oid>>();
+	// The last restacked stack shown, keyed by the stack's and the store's identity.
+	#shown: { readonly key: string; readonly derivation: Derivation } | undefined;
 	#abort: AbortController | undefined;
 	// The merge tool being waited for, which holds a throwaway directory until it returns.
 	#tool: Promise<MergetoolOutcome> | undefined;
 
-	private constructor(repo: Repo, cat: CatFile, base: string | undefined) {
+	private constructor(repo: Repo, base: string | undefined) {
 		this.repo = repo;
 		this.#base = base;
-		this.#cat = cat;
+		const dir = join(repo.commonDir, "suonetar");
+		objectsSweep(dir);
+		this.#objects = join(dir, `objects-${hostName()}-${process.pid}-${Math.random().toString(36).slice(2)}`);
+		this.#view = repoWithObjects(repo, this.#objects);
+		this.#cat = new CatFile(this.#view);
 		this.#mutex = mutexFor(repo);
 	}
 
@@ -166,7 +260,7 @@ export class Session {
 	}
 
 	static async openRepo(repo: Repo, base: string | undefined): Promise<Session> {
-		return new Session(repo, new CatFile(repo), base);
+		return new Session(repo, base);
 	}
 
 	#stackRead(): Promise<Stack> {
@@ -175,6 +269,7 @@ export class Session {
 
 	close(): void {
 		this.#cat.close();
+		rmSync(this.#objects, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 	}
 
 	// Closes once the operation in progress (and any queued behind it) has finished, including a merge tool, which runs outside the queue.
@@ -221,10 +316,14 @@ export class Session {
 				return pending;
 			}
 			try {
-				const stack = await this.#stackRead();
-				const store = await storeRead(this.repo, this.#cat);
-				const drafts = await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts);
-				return { kind: "ready", stack, drafts, undo: await this.#undoInfo(stack, drafts) };
+				const derivation = await this.#derivationShown();
+				return {
+					kind: "ready",
+					stack: derivation.stack,
+					drafts: derivation.statuses,
+					undo: await this.#undoInfo(derivation.stack, derivation.statuses),
+					commits: commitStatuses(derivation),
+				};
 			} catch (err) {
 				if (err instanceof ErrorNotOnBranch || err instanceof ErrorNoBase) {
 					return { kind: "unavailable", reason: err.message };
@@ -234,19 +333,40 @@ export class Session {
 		});
 	}
 
-	// The whole commit as the editor shows it: every file its change or its draft touches, with the three versions of each.
+	// The whole commit as the editor shows it, restacked onto the edits below: every file its change or its draft touches, with the three versions of each.
 	commitDocument(oid: Oid): Promise<CommitDocument> {
 		return this.#mutex.run(async () => {
-			const commit = await this.#commit(oid);
-			const parent = commit.parents[0];
-			if (parent === undefined) {
-				throw new ErrorStale(`the parent of ${oid.slice(0, 12)}`);
+			const derivation = await this.#derivationShown();
+			const derived = derivedFor(derivation, oid);
+			const commit = derived.commit;
+			const current = currentFor(derivation, oid);
+			const originalParent = originalParentTree(derivation, oid);
+			const unedited = await treeRestacked(this.#view, originalParent, derived.parentTree, commit.tree);
+			const files = await this.#documentFiles(derived.parentTree, unedited.tree, derived.tree, new Set(unedited.conflicted), new Set(derived.provisional));
+			const draftMsg = current === undefined ? undefined : draftMessage(current.draft);
+			return {
+				oid,
+				parent: commit.parent,
+				parentTree: derived.parentTree,
+				tree: derived.tree,
+				subject: commit.subject,
+				message: commit.message,
+				draftMessage: draftMsg,
+				hasDraft: current !== undefined,
+				files,
+			};
+		});
+	}
+
+	// The conflict restacking this commit runs into, for resolving it.
+	commitConflict(oid: Oid): Promise<ConflictReport> {
+		return this.#mutex.run(async () => {
+			const derivation = await this.#derivationShown();
+			const report = conflictReport(derivation, derivedFor(derivation, oid));
+			if (report === undefined) {
+				throw new ErrorStale(`a conflict in ${oid.slice(0, 12)}`);
 			}
-			const draft = await this.#draftHere((await storeRead(this.repo, this.#cat)).drafts.get(oid));
-			const parentTree = (await commitRead(this.#cat, parent)).tree;
-			const files = await this.#documentFiles(parentTree, commit.tree, draft?.tree ?? commit.tree);
-			const draftMsg = draft ? draftMessage(draft) : undefined;
-			return { oid, parent, subject: commitSubject(commit), message: commit.message, draftMessage: draftMsg, hasDraft: draft !== undefined, files };
+			return report;
 		});
 	}
 
@@ -257,9 +377,22 @@ export class Session {
 			if (draft === undefined) {
 				throw new ErrorStale(`the draft for ${against.slice(0, 12)}`);
 			}
-			const files = await this.#documentFiles(draft.base, draft.base, draft.tree ?? draft.base);
+			// Made on a parent with edits of its own, the draft is shown against the commit as restacked onto that parent, so only its own changes show.
+			const before =
+				draft.parentTree === undefined || draft.baseParent === undefined ? draft.base : (await treeRestacked(this.#view, draft.baseParent, draft.parentTree, draft.base)).tree;
+			const files = await this.#documentFiles(before, before, draft.tree ?? before, new Set(), new Set());
 			const baseMessage = draft.meta.baseMessage === undefined ? Buffer.alloc(0) : Buffer.from(draft.meta.baseMessage, "base64");
-			return { oid: against, parent: against, subject: draft.meta.subject, message: baseMessage, draftMessage: draftMessage(draft), hasDraft: true, files };
+			return {
+				oid: against,
+				parent: against,
+				parentTree: before,
+				tree: draft.tree ?? before,
+				subject: draft.meta.subject,
+				message: baseMessage,
+				draftMessage: draftMessage(draft),
+				hasDraft: true,
+				files,
+			};
 		});
 	}
 
@@ -274,39 +407,44 @@ export class Session {
 		});
 	}
 
-	// Sets one file of a commit's draft; null deletes the file. The commit need not be in the current stack: an edit saved against a commit rewritten meanwhile is kept and later offered for confirmation onto its successor.
-	draftSetFile(oid: Oid, path: string, content: Buffer | null): Promise<void> {
+	// Sets one file of a commit's draft (null deletes it), as edited in a document that showed the commit on `parentTree` with the file as blob `shown` (null: absent). Returns the blob now stored, or null for a deletion. The commit need not be in the current stack: an edit saved against a commit rewritten meanwhile is kept and later offered for confirmation onto its successor.
+	draftSetFile(oid: Oid, parentTree: Oid, path: string, shown: Oid | null, content: Buffer | null): Promise<Oid | null> {
 		return this.#mutex.run(async () => {
-			const commit = await this.#basics(oid);
-			const store = await storeRead(this.repo, this.#cat);
+			const derivation = await this.#derivationIfAny(oid);
+			const store = derivation?.store ?? (await storeRead(this.repo, this.#cat));
 			const existing = store.drafts.get(oid);
 			const branch = await this.#draftBranch(existing, path);
-			const tree = await treeWithFile(this.repo, existing?.tree ?? commit.tree, commit.tree, path, content);
-			const next = draftFor(commit, branch, tree === commit.tree ? undefined : { tree, parentTree: commit.parentTree }, existing ? draftMessage(existing) : undefined);
-			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
+			const target = await this.#editTarget(store, derivation, oid, parentTree, { path, blob: shown ?? undefined });
+			const tree = await treeWithFile(this.repo, target.version.tree, target.commit.tree, path, content);
+			await this.#versionStore(store, target, branch, existing, tree);
+			return (await this.#entryOid(this.repo, tree, path)) ?? null;
 		});
 	}
 
-	// Sets one file of a commit's draft back to its version in the commit or in the commit's parent, mode and all; absent there means deleted.
-	draftRestore(oid: Oid, path: string, from: "commit" | "parent"): Promise<void> {
+	// Sets one file of a commit's draft back to its version in the commit (as restacked) or in the parent shown, mode and all; absent there means deleted.
+	draftRestore(oid: Oid, parentTree: Oid, path: string, from: "commit" | "parent"): Promise<void> {
 		return this.#mutex.run(async () => {
-			const commit = await this.#basics(oid);
-			const source = from === "parent" ? commit.parentTree : commit.tree;
-			const store = await storeRead(this.repo, this.#cat);
+			const derivation = await this.#derivationIfAny(oid);
+			const store = derivation?.store ?? (await storeRead(this.repo, this.#cat));
 			const existing = store.drafts.get(oid);
 			const branch = await this.#draftBranch(existing, path);
-			const tree = await treeWithEntry(this.repo, existing?.tree ?? commit.tree, path, source);
-			const next = draftFor(commit, branch, tree === commit.tree ? undefined : { tree, parentTree: commit.parentTree }, existing ? draftMessage(existing) : undefined);
-			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
+			const target = await this.#editTarget(store, derivation, oid, parentTree, undefined);
+			const source = from === "parent" ? target.version.parentTree : target.unedited;
+			const tree = await treeWithEntry(this.repo, target.version.tree, path, source);
+			await this.#versionStore(store, target, branch, existing, tree);
 		});
 	}
 
 	draftSetMessage(oid: Oid, message: Buffer | undefined): Promise<void> {
 		return this.#mutex.run(async () => {
-			const commit = await this.#basics(oid);
 			const store = await storeRead(this.repo, this.#cat);
 			const existing = store.drafts.get(oid);
-			const next = draftFor(commit, await this.#draftBranch(existing, "(message)"), existing === undefined ? undefined : draftVersion(existing, commit), message);
+			const branch = await this.#draftBranch(existing, "(message)");
+			const commit = await this.#basics(oid);
+			const version = existing === undefined ? undefined : draftVersion(existing, commit);
+			const made = draftFor(commit, branch, version, message);
+			// A resolution stays one when only its message changes.
+			const next = made === undefined || existing === undefined ? made : { ...made, meta: { ...made.meta, origin: existing.meta.origin }, fallback: existing.fallback };
 			await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
 		});
 	}
@@ -321,7 +459,8 @@ export class Session {
 		return this.#mutex.run(async () => {
 			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
-			const status = (await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts)).find((s) => s.draft.meta.against === against);
+			const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
+			const status = (await draftsResolve(this.repo, stack, baseTree, store.drafts)).find((s) => s.draft.meta.against === against);
 			if (status?.kind !== "rebased") {
 				throw new ErrorStale(`a rebased draft for ${against.slice(0, 12)}`);
 			}
@@ -348,13 +487,18 @@ export class Session {
 		});
 	}
 
-	// Records how one conflict (identified by its key) is resolved. Every path the conflict involves must be accounted for, and text must be free of conflict markers unless explicitly allowed.
+	// Records how one conflict (identified by its key) is resolved. Every path the conflict involves must be accounted for, and text must be free of conflict markers unless explicitly allowed. Once every conflict of the commit is resolved, the result becomes the commit's stored version, made on the parent it was resolved against.
 	resolve(inputs: MergeInputs, key: string, choices: readonly ResolutionChoice[]): Promise<ResolveResult> {
 		return this.#mutex.run(async () => {
-			const merged = await mergeTrees(this.repo, inputs.base, inputs.ours, inputs.theirs);
-			const conflict = merged.kind === "conflict" ? merged.conflicts.find((c) => c.key === key) : undefined;
-			if (conflict === undefined) {
+			const derivation = await this.#derivationConflicted(inputs);
+			const derived = derivation?.commits.find((d) => d.conflict !== undefined && inputsEqual(d.conflict.inputs, inputs));
+			const found = derived?.conflict;
+			const conflict = found?.conflicts.find((c) => c.key === key);
+			if (derivation === undefined || derived === undefined || found === undefined || conflict === undefined) {
 				return { kind: "invalid", reason: "that conflict no longer occurs; refresh" };
+			}
+			if (derivation.statuses.some((s) => (s.kind === "rebased" || s.kind === "conflict") && s.commit.oid === derived.commit.oid)) {
+				return { kind: "invalid", reason: "an edit to this commit waits for confirmation; confirm or discard it first" };
 			}
 			const mentioned = new Set(choices.flatMap((c) => ("from" in c && c.from !== undefined ? [c.path, c.from] : [c.path])));
 			const missing = conflict.paths.filter((p) => !mentioned.has(p));
@@ -383,16 +527,47 @@ export class Session {
 					changes.push({ path: choice.path, mode, oid: await blobWrite(this.repo, choice.content) });
 				}
 			}
-			await this.#storeUpdate(await storeRead(this.repo, this.#cat), undefined, (resolutions) => resolutions.set(key, { changes, entryOid: undefined }));
+			const store = derivation.store;
+			const rowOf = (k: string) => (k === key ? changes : store.resolutions.get(k)?.changes);
+			if (!found.conflicts.every((c) => rowOf(c.key) !== undefined)) {
+				await this.#storeUpdate(store, undefined, (resolutions) => resolutions.set(key, { changes, entryOid: undefined }));
+				return { kind: "resolved" };
+			}
+			const tree = await treeWithChanges(
+				this.repo,
+				found.markerTree,
+				found.conflicts.flatMap((c) => rowOf(c.key) ?? []),
+			);
+			const commit = derived.commit;
+			const existing = store.drafts.get(commit.oid);
+			const branch = await this.#draftBranch(existing, "(resolution)");
+			const basics: CommitBasics = { ...commit, parentTree: originalParentTree(derivation, commit.oid) };
+			const previous = existing === undefined ? undefined : draftVersion(existing, basics);
+			// What this resolution replaces, to fall back on should it stop merging: the version from before any resolution.
+			const fallback = existing?.meta.origin === "resolution" ? existing.fallback : (previous ?? { tree: commit.tree, parentTree: basics.parentTree });
+			const made = draftFor(basics, branch, { tree, parentTree: derived.parentTree }, existing === undefined ? undefined : draftMessage(existing));
+			if (made === undefined) {
+				throw new Error("a resolution always has a version");
+			}
+			const folded: DraftEntry = { ...made, meta: { ...made.meta, origin: "resolution" }, fallback };
+			await this.#storeUpdate(
+				store,
+				(drafts) => drafts.set(commit.oid, folded),
+				(resolutions) => {
+					for (const c of found.conflicts) {
+						resolutions.delete(c.key);
+					}
+				},
+			);
 			return { kind: "resolved" };
 		});
 	}
 
 	preview(): Promise<PreviewResult> {
-		return this.#mutex.run(async () => (await this.#plan()).preview);
+		return this.#mutex.run(async () => (await this.#plan(await this.#derivationShown())).preview);
 	}
 
-	// Publishes every draft: replay, the pre-commit hook on each rewritten commit (unless skipped), then the locked publish.
+	// Publishes every draft: the restacked stack, the pre-commit hook on each rewritten commit (unless skipped), then the locked publish.
 	async apply(hooks: HookChoice, progress: (p: ApplyProgress) => void): Promise<ApplyResult> {
 		// Created before queueing, so a cancel pressed while the apply waits or prepares is not lost.
 		const abort = new AbortController();
@@ -418,7 +593,7 @@ export class Session {
 	// A path's EditorConfig indentation as of `tree`, for editors that show something other than a document file (a conflict's marker file).
 	indentation(tree: Oid, path: string): Promise<Indentation> {
 		return this.#mutex.run(async () => {
-			const found = (await indentationFor(this.repo, this.#cat, tree, [path])).get(path);
+			const found = (await indentationFor(this.#view, this.#cat, tree, [path])).get(path);
 			if (found === undefined) {
 				throw new Error(`no indentation resolved for ${path}`);
 			}
@@ -447,9 +622,10 @@ export class Session {
 		const abort = new AbortController();
 		this.#abort = abort;
 		try {
+			// Merged into the repository's own objects: the tool runs in the user's environment, and may start an IDE that commits, which must not write into objects that go away.
 			const conflict = await this.#mutex.run(async () => {
-				const merged = await mergeTrees(this.repo, inputs.base, inputs.ours, inputs.theirs);
-				return merged.kind === "conflict" ? merged.conflicts.find((c) => c.key === key) : undefined;
+				const derived = (await this.#derivationConflicted(inputs))?.commits.find((d) => d.conflict !== undefined && inputsEqual(d.conflict.inputs, inputs));
+				return derived?.conflict?.conflicts.find((c) => c.key === key);
 			});
 			if (conflict === undefined) {
 				return { kind: "stale" };
@@ -480,7 +656,8 @@ export class Session {
 			}
 			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
-			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, await this.#baseTree(stack), store.drafts)));
+			const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
+			const assessed = await undoAssess(this.repo, this.#cat, stack, draftsHere(await draftsResolve(this.repo, stack, baseTree, store.drafts)));
 			const info = assessed?.info;
 			if (info === undefined || info.kind === "unavailable" || info.old !== old || info.new !== newTip || info.kind !== kind || assessed?.pairing === undefined) {
 				return info?.kind === "unavailable" ? { kind: "unavailable", reason: info.reason } : { kind: "stale" };
@@ -516,12 +693,131 @@ export class Session {
 		}
 	}
 
+	// The stack restacked onto every current draft, up to and including `upTo` if given. Through `#view` for showing, and through `repo` for anything that will be stored or published, so the trees it names are in the repository.
+	async #derivation(repo: Repo, upTo?: Oid): Promise<Derivation> {
+		return this.#derivationOf(repo, await this.#stackRead(), await storeRead(this.repo, this.#cat), upTo);
+	}
+
+	async #derivationOf(repo: Repo, stack: Stack, store: Store, upTo?: Oid): Promise<Derivation> {
+		const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
+		const statuses = await draftsResolve(repo, stack, baseTree, store.drafts);
+		const edits = new Map<Oid, Edit>(statuses.filter((s): s is Current => s.kind === "current").map((s) => [s.commit.oid, s.edit]));
+		const resolutions = new Map([...store.resolutions].map(([key, r]) => [key, r.changes]));
+		const end = upTo === undefined ? stack.commits.length - 1 : stack.commits.findIndex((c) => c.oid === upTo);
+		const commits = await this.#stackDerive(repo, stack.commits.slice(0, end + 1), baseTree, edits, resolutions);
+		return { stack, store, baseTree, statuses, commits };
+	}
+
+	// `stackDerive` with remembered merges and stand-ins. A remembered result whose objects `git gc` has since pruned (they are unreachable until stored) fails a merge or a final check, and the derivation is done again from scratch.
+	async #stackDerive(
+		repo: Repo,
+		commits: readonly StackCommit[],
+		baseTree: Oid,
+		edits: ReadonlyMap<Oid, Edit>,
+		resolutions: ReadonlyMap<string, readonly ResolutionChange[]>,
+	): Promise<DerivedCommit[]> {
+		let memo = this.#merges.get(repo);
+		if (memo === undefined) {
+			memo = new Map();
+			this.#merges.set(repo, memo);
+		}
+		const remembered = memo;
+		const config = await this.#mergeConfig();
+		for (let attempt = 0; ; attempt++) {
+			const reused: Oid[] = [];
+			const remember = <T extends MergeResult | Oid>(key: string, result: T): T => {
+				if (remembered.size >= MERGES_REMEMBERED_MAX) {
+					remembered.clear();
+				}
+				remembered.set(key, result);
+				return result;
+			};
+			const trees: DeriveTrees = {
+				repo,
+				merge: async (base, ours, theirs) => {
+					const key = `${config}\0merge ${base} ${ours} ${theirs}`;
+					const known = remembered.get(key);
+					if (known !== undefined && typeof known !== "string") {
+						reused.push(known.kind === "clean" ? known.tree : known.markerTree);
+						return known;
+					}
+					return remember(key, await mergeTrees(repo, base, ours, theirs));
+				},
+				standIn: async (markerTree, theirs, paths) => {
+					const key = `standIn ${markerTree} ${theirs} ${JSON.stringify(paths)}`;
+					const known = remembered.get(key);
+					if (typeof known === "string") {
+						reused.push(known);
+						return known;
+					}
+					return remember(key, await treeTakingPaths(repo, markerTree, theirs, paths));
+				},
+			};
+			try {
+				const derived = await stackDerive(trees, commits, baseTree, edits, resolutions);
+				if (attempt > 0 || (await objectsPresent(repo, reused))) {
+					return derived;
+				}
+			} catch (err) {
+				if (attempt > 0 || !(err instanceof ErrorGit)) {
+					throw err;
+				}
+			}
+			remembered.clear();
+		}
+	}
+
+	// The derivation, for storing, up to the commit whose restacking runs into the merge `inputs`, which the shown derivation finds; undefined when none does.
+	async #derivationConflicted(inputs: MergeInputs): Promise<Derivation | undefined> {
+		const shown = (await this.#derivationShown()).commits.find((d) => d.conflict !== undefined && inputsEqual(d.conflict.inputs, inputs));
+		return shown === undefined ? undefined : this.#derivation(this.repo, shown.commit.oid);
+	}
+
+	// The derivation for storing an edit to `oid` (only what is below it matters), or undefined when there is no stack to derive (HEAD detached mid-rebase, no base), where an edit can still be saved against the commit it was made on.
+	async #derivationIfAny(oid: Oid): Promise<Derivation | undefined> {
+		try {
+			return await this.#derivation(this.repo, oid);
+		} catch (err) {
+			if (err instanceof ErrorNotOnBranch || err instanceof ErrorNoBase) {
+				return undefined;
+			}
+			throw err;
+		}
+	}
+
+	// The settings that change how merges come out.
+	async #mergeConfig(): Promise<string> {
+		const result = await this.repo.run(["config", "--get-regexp", "^(merge|diff)\\."], { cwd: this.repo.worktree });
+		if (result.code > 1) {
+			throw new Error(`git config --get-regexp failed: ${result.stderr}`);
+		}
+		return result.stdout.toString("utf8");
+	}
+
+	// What the restacking depends on is the branch, its commits, its base, the store, and the merge settings; the rest of the stack (what is pushed, other branches) is read afresh.
+	async #derivationShown(): Promise<Derivation> {
+		const stack = await this.#stackRead();
+		const store = await storeRead(this.repo, this.#cat);
+		const key = `${stack.branch}\0${stack.generation}\0${store.refOid ?? ""}\0${await this.#mergeConfig()}`;
+		// Trees made since are unreachable, so `git gc --prune=now` elsewhere may have removed some.
+		if (
+			this.#shown?.key !== key ||
+			!(await objectsPresent(
+				this.#view,
+				this.#shown.derivation.commits.map((d) => d.tree),
+			))
+		) {
+			this.#shown = { key, derivation: await this.#derivationOf(this.#view, stack, store) };
+		}
+		return { ...this.#shown.derivation, stack };
+	}
+
 	async #apply(hooks: HookChoice, progress: (p: ApplyProgress) => void, signal: AbortSignal): Promise<ApplyResult> {
 		const pending = intentCheck(this.repo);
 		if (pending) {
 			return pending;
 		}
-		const plan = await this.#plan();
+		const plan = await this.#plan(await this.#derivation(this.repo));
 		if (plan.preview.kind !== "clean" || plan.steps === undefined) {
 			return plan.preview.kind === "clean" ? { kind: "nothing" } : plan.preview;
 		}
@@ -621,29 +917,73 @@ export class Session {
 		}
 	}
 
-	async #plan(): Promise<{ stack: Stack; preview: PreviewResult; steps?: readonly ReplayStep[]; applied: DraftEntry[] }> {
-		const stack = await this.#stackRead();
-		const store = await storeRead(this.repo, this.#cat);
-		const baseTree = await this.#baseTree(stack);
-		const statuses = await draftsResolve(this.repo, stack, baseTree, store.drafts);
+	async #plan(derivation: Derivation): Promise<{ stack: Stack; preview: PreviewResult; steps?: readonly ReplayStep[]; applied: DraftEntry[] }> {
+		const { stack, statuses } = derivation;
 		const blocking = statuses.filter((s) => s.kind === "rebased" || s.kind === "conflict");
 		if (blocking.length > 0) {
 			return { stack, preview: { kind: "drafts-need-attention", drafts: blocking }, applied: [] };
 		}
-		const current = statuses.filter((s): s is Extract<DraftStatus, { kind: "current" }> => s.kind === "current");
-		const edits = new Map<Oid, Edit>(current.map((s) => [s.commit.oid, s.edit]));
-		const resolutions = new Map([...store.resolutions].map(([key, r]) => [key, r.changes]));
-		const result = await replayTrees(this.repo, stack.commits, baseTree, edits, resolutions);
-		const applied = current.map((s) => s.draft);
-		if (result.kind === "conflict") {
-			const { commit, inputs, markerTree, conflicts } = result;
-			return { stack, preview: { kind: "conflict", commit, inputs, markerTree, conflicts }, applied };
+		const applied = statuses.filter((s): s is Current => s.kind === "current").map((s) => s.draft);
+		const conflicted = derivation.commits.map((d) => conflictReport(derivation, d)).find((r) => r !== undefined);
+		if (conflicted !== undefined) {
+			return { stack, preview: { kind: "conflict", ...conflicted }, applied };
 		}
-		if (!result.steps.some((s) => s.rewrite)) {
+		const steps = derivedSteps(derivation.baseTree, derivation.commits);
+		if (!steps.some((s) => s.rewrite)) {
 			return { stack, preview: { kind: "nothing" }, applied };
 		}
-		const steps = result.steps.map((s) => ({ oid: s.commit.oid, subject: s.commit.subject, rewrite: s.rewrite, empty: s.empty, dropsSignature: s.rewrite && s.commit.signed }));
-		return { stack, preview: { kind: "clean", steps }, steps: result.steps, applied };
+		const summaries = steps.map((s) => ({ oid: s.commit.oid, subject: s.commit.subject, rewrite: s.rewrite, empty: s.empty, dropsSignature: s.rewrite && s.commit.signed }));
+		return { stack, preview: { kind: "clean", steps: summaries }, steps, applied };
+	}
+
+	// Where an edit to `oid`, made in a document that showed it on `parentTree`, lands. With `shown`, the file must still be that blob there, or the edit was made on something that has changed since.
+	async #editTarget(
+		store: Store,
+		derivation: Derivation | undefined,
+		oid: Oid,
+		parentTree: Oid,
+		shown: { readonly path: string; readonly blob: Oid | undefined } | undefined,
+	): Promise<EditTarget> {
+		const matches = async (tree: Oid) => shown === undefined || (await this.#entryOid(this.repo, tree, shown.path)) === shown.blob;
+		const stale = () => new ErrorEditStale(shown?.path ?? oid.slice(0, 12));
+		const derived = derivation?.commits.find((d) => d.commit.oid === oid);
+		const commit = derivation === undefined || derived === undefined ? await this.#basics(oid) : { ...derived.commit, parentTree: originalParentTree(derivation, oid) };
+		const existing = store.drafts.get(oid);
+		const stored = (existing === undefined ? undefined : draftVersion(existing, commit)) ?? { tree: commit.tree, parentTree: commit.parentTree };
+		let version: Version | undefined;
+		// The commit as derived now, unless a conflict in it makes that a stand-in, or the document showed it on another parent.
+		if (derived !== undefined && derived.conflict === undefined && (derived.parentTree === parentTree || shown !== undefined) && (await matches(derived.tree))) {
+			version = { tree: derived.tree, parentTree: derived.parentTree };
+		} else if ((stored.parentTree === parentTree || shown !== undefined) && (await matches(stored.tree))) {
+			// The file is as the document showed it, so the edit lands on the stored version whatever parent the document showed it on.
+			version = stored;
+		} else if ((await this.repo.run(["cat-file", "-e", `${parentTree}^{tree}`], { cwd: this.repo.worktree })).code === 0) {
+			const rebuilt = await treeRestacked(this.repo, stored.parentTree, parentTree, stored.tree);
+			version = rebuilt.conflicted.length === 0 && (await matches(rebuilt.tree)) ? { tree: rebuilt.tree, parentTree } : undefined;
+		}
+		if (version === undefined) {
+			throw stale();
+		}
+		const unedited = await treeRestacked(this.repo, commit.parentTree, version.parentTree, commit.tree);
+		return { commit, version, unedited: unedited.tree, restacked: unedited.conflicted.length === 0 };
+	}
+
+	// Stores `tree` as the commit's new version on the target's parent, or drops the draft's files when that is just the commit restacked.
+	async #versionStore(store: Store, target: EditTarget, branch: string, existing: DraftEntry | undefined, tree: Oid): Promise<void> {
+		const unchanged = target.restacked && tree === target.unedited;
+		const next = draftFor(
+			target.commit,
+			branch,
+			unchanged ? undefined : { tree, parentTree: target.version.parentTree },
+			existing === undefined ? undefined : draftMessage(existing),
+		);
+		const oid = target.commit.oid;
+		await this.#storeUpdate(store, (drafts) => (next === undefined ? drafts.delete(oid) : drafts.set(oid, next)));
+	}
+
+	async #entryOid(repo: Repo, tree: Oid, path: string): Promise<Oid | undefined> {
+		const [entry] = await treeList(repo, tree, { recursive: false, paths: [`:(literal)${path}`] });
+		return entry !== undefined && entry.path === path && entry.type === "blob" ? entry.oid : undefined;
 	}
 
 	// Removes the drafts that were published, but only those unchanged since the apply read them: an edit saved meanwhile stays. Resolutions are cleared too; they were specific to the stack just replaced.
@@ -677,16 +1017,57 @@ export class Session {
 		drafts?.(nextDrafts);
 		resolutions?.(nextResolutions);
 		await storeWrite(this.repo, store, nextDrafts, nextResolutions);
+		await this.#resolutionsSpentDrop();
 	}
 
-	async #documentFiles(parentTree: Oid, commitTree: Oid, draftTree: Oid): Promise<DocumentFile[]> {
-		const byCommit = await treeDiff(this.repo, parentTree, commitTree);
-		const byDraft = draftTree === commitTree ? byCommit : await treeDiff(this.repo, parentTree, draftTree);
+	// A resolution whose own version no longer merges, while the version it replaced does, resolved a conflict that is gone (the edit below that caused it was undone): the commit goes back to that version, so nothing is left stored that changes nothing. Computed as the stack is shown, which the next read reuses.
+	async #resolutionsSpentDrop(): Promise<void> {
+		let derivation: Derivation;
+		try {
+			derivation = await this.#derivationShown();
+		} catch (err) {
+			if (err instanceof ErrorNotOnBranch || err instanceof ErrorNoBase) {
+				return;
+			}
+			throw err;
+		}
+		const spent = derivation.commits.flatMap((d) => {
+			const current = currentFor(derivation, d.commit.oid);
+			const fallback = current?.draft.fallback;
+			return d.fallback && current !== undefined && current.draft.meta.origin === "resolution" && fallback !== undefined ? [{ d, current, fallback }] : [];
+		});
+		if (spent.length === 0) {
+			return;
+		}
+		const drafts = new Map(derivation.store.drafts);
+		for (const { d, current, fallback } of spent) {
+			const commit: CommitBasics = { ...d.commit, parentTree: originalParentTree(derivation, d.commit.oid) };
+			const implicit = fallback.tree === commit.tree && fallback.parentTree === commit.parentTree;
+			const next = draftFor(commit, current.draft.meta.branch, implicit ? undefined : fallback, draftMessage(current.draft));
+			if (next === undefined) {
+				drafts.delete(d.commit.oid);
+			} else {
+				drafts.set(d.commit.oid, next);
+			}
+		}
+		await storeWrite(this.repo, derivation.store, drafts, derivation.store.resolutions);
+	}
+
+	// Read through the private objects, so trees made only for showing can be listed.
+	async #documentFiles(parentTree: Oid, commitTree: Oid, draftTree: Oid, mineUnknown: ReadonlySet<string>, provisional: ReadonlySet<string>): Promise<DocumentFile[]> {
+		const repo = this.#view;
+		const byCommit = await treeDiff(repo, parentTree, commitTree);
+		const byDraft = draftTree === commitTree ? byCommit : await treeDiff(repo, parentTree, draftTree);
 		const paths = [...new Set([...byCommit, ...byDraft].map((c) => c.path))].sort();
-		const refusals = await editability(this.repo, draftTree, paths);
-		const shown = await indentationFor(this.repo, this.#cat, draftTree, paths);
+		const refusals = await editability(repo, draftTree, paths);
+		const shown = await indentationFor(repo, this.#cat, draftTree, paths);
 		const deleted = byDraft.filter((c) => c.status === "D").map((c) => c.path);
-		const before = deleted.length === 0 ? new Map<string, Indentation>() : await indentationFor(this.repo, this.#cat, parentTree, deleted);
+		const before = deleted.length === 0 ? new Map<string, Indentation>() : await indentationFor(repo, this.#cat, parentTree, deleted);
+		const blobs = new Map(
+			paths.length === 0
+				? []
+				: (await treeList(repo, draftTree, { recursive: true, paths: paths.map((p) => `:(literal)${p}`) })).filter((e) => e.type === "blob").map((e) => [e.path, e.oid]),
+		);
 		const indentationOf = (path: string): Indentation => {
 			const found = before.get(path) ?? shown.get(path);
 			if (found === undefined) {
@@ -708,8 +1089,11 @@ export class Session {
 				parent: tooLarge ? undefined : parent,
 				commit: tooLarge ? undefined : commit,
 				draft: tooLarge ? undefined : draft,
+				draftOid: blobs.get(path),
 				tooLarge,
 				indentation: indentationOf(path),
+				mineUnknown: mineUnknown.has(path),
+				provisional: provisional.has(path),
 			});
 		}
 		return files;
@@ -738,25 +1122,6 @@ export class Session {
 		return { oid, tree: info.tree, authorLine: info.authorLine, subject: commitSubject(info), message: info.message, parentTree: (await commitRead(this.#cat, parent)).tree };
 	}
 
-	async #baseTree(stack: Stack): Promise<Oid> {
-		return (await commitRead(this.#cat, stack.baseOid)).tree;
-	}
-
-	// A commit's stored draft, unless it belongs to another branch: that one is shown and adopted separately, never blended into this branch's view.
-	async #draftHere(draft: DraftEntry | undefined): Promise<DraftEntry | undefined> {
-		if (draft === undefined) {
-			return undefined;
-		}
-		try {
-			return draft.meta.branch === (await branchCurrent(this.repo)) ? draft : undefined;
-		} catch (err) {
-			if (err instanceof ErrorNotOnBranch) {
-				return draft;
-			}
-			throw err;
-		}
-	}
-
 	// The branch a draft belongs to: the checked-out branch, or while HEAD is detached (mid-rebase, say) the branch the draft already has. A draft from another branch is never extended; it has to be adopted first.
 	async #draftBranch(existing: DraftEntry | undefined, path: string): Promise<string> {
 		let branch: string;
@@ -776,4 +1141,83 @@ export class Session {
 		}
 		return branch;
 	}
+}
+
+// Whether every one of `oids` is in the repository's objects (through `repo`, so the private ones count for `#view`).
+async function objectsPresent(repo: Repo, oids: readonly Oid[]): Promise<boolean> {
+	if (oids.length === 0) {
+		return true;
+	}
+	const listed = await repo.run(["cat-file", "--batch-check"], { cwd: repo.worktree, input: `${oids.join("\n")}\n` });
+	if (listed.code !== 0) {
+		throw new ErrorGit(["cat-file", "--batch-check"], listed.code, listed.stderr);
+	}
+	return !/ missing$/m.test(listed.stdout.toString("utf8"));
+}
+
+function derivedFor(derivation: Derivation, oid: Oid): DerivedCommit {
+	const derived = derivation.commits.find((d) => d.commit.oid === oid);
+	if (derived === undefined) {
+		throw new ErrorStale(`commit ${oid.slice(0, 12)}`);
+	}
+	return derived;
+}
+
+function currentFor(derivation: Derivation, oid: Oid): Current | undefined {
+	return derivation.statuses.find((s): s is Current => s.kind === "current" && s.commit.oid === oid);
+}
+
+// The tree of a stack commit's original parent.
+function originalParentTree(derivation: Derivation, oid: Oid): Oid {
+	const index = derivation.stack.commits.findIndex((c) => c.oid === oid);
+	if (index === -1) {
+		throw new ErrorStale(`commit ${oid.slice(0, 12)}`);
+	}
+	return derivation.stack.commits[index - 1]?.tree ?? derivation.baseTree;
+}
+
+function conflictReport(derivation: Derivation, derived: DerivedCommit): ConflictReport | undefined {
+	const conflict = derived.conflict;
+	if (conflict === undefined) {
+		return undefined;
+	}
+	const commit: StackCommit = derived.commit;
+	return {
+		commit: {
+			oid: commit.oid,
+			tree: commit.tree,
+			authorLine: commit.authorLine,
+			subject: commit.subject,
+			message: commit.message,
+			parent: commit.parent,
+			parentTree: originalParentTree(derivation, commit.oid),
+		},
+		inputs: conflict.inputs,
+		markerTree: conflict.markerTree,
+		conflicts: conflict.conflicts,
+		edited: currentFor(derivation, commit.oid)?.edit.tree !== undefined,
+	};
+}
+
+function commitStatuses(derivation: Derivation): CommitStatus[] {
+	const steps = derivedSteps(derivation.baseTree, derivation.commits);
+	let conflictBelow: Oid | undefined;
+	return derivation.commits.map((d, i) => {
+		const current = currentFor(derivation, d.commit.oid);
+		let kind: CommitStatus["kind"];
+		if (d.conflict !== undefined) {
+			kind = "conflict";
+		} else if (d.resolvedByTable || (current?.draft.meta.origin === "resolution" && !d.fallback)) {
+			kind = "resolved";
+		} else if (current !== undefined && current.draft.meta.origin !== "resolution") {
+			kind = "edited";
+		} else {
+			kind = steps[i]?.rewrite === true ? "rewritten" : "unchanged";
+		}
+		const status: CommitStatus = { oid: d.commit.oid, kind, provisional: d.provisional, conflictBelow: d.provisional.length === 0 ? undefined : conflictBelow };
+		if (d.conflict !== undefined && conflictBelow === undefined) {
+			conflictBelow = d.commit.oid;
+		}
+		return status;
+	});
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { ErrorEditRefused } from "./errors.ts";
 import type { Oid } from "./git.ts";
 import { Session } from "./session.ts";
+import { draftFile, draftFileRestore } from "./test-support/drafts.ts";
 import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
 
 describe("session drafts", () => {
@@ -43,13 +44,13 @@ describe("session drafts", () => {
 	}
 
 	test("a draft shows in the commit document, and setting the file back removes it", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from("changed\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("changed\n"));
 		const versions = await file(c1, "a.txt");
 		expect(versions.parent?.toString()).toBe(lines("a"));
 		expect(versions.commit?.toString()).toBe(lineSet(lines("a"), 2, "c1"));
 		expect(versions.draft?.toString()).toBe("changed\n");
 		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
-		await session.draftSetFile(c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "c1")));
+		await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "c1")));
 		expect(await drafts()).toEqual([]);
 	});
 
@@ -59,9 +60,9 @@ describe("session drafts", () => {
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
 		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
-		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho hi\n"));
-		await session.draftSetFile(c3, "new/file.txt", Buffer.from("new\n"));
-		await session.draftSetFile(c3, "b.txt", null);
+		await draftFile(session, c3, "run.sh", Buffer.from("#!/bin/sh\necho hi\n"));
+		await draftFile(session, c3, "new/file.txt", Buffer.from("new\n"));
+		await draftFile(session, c3, "b.txt", null);
 		const files = (await session.commitDocument(c3)).files;
 		expect(Object.fromEntries(files.map((f) => [f.path, f.status]))).toEqual({ "b.txt": "D", "new/file.txt": "A", "run.sh": "A" });
 		const before = fx.git("rev-parse", "HEAD");
@@ -78,7 +79,7 @@ describe("session drafts", () => {
 		const c4 = fx.commit("delete link", {});
 		session.close();
 		session = await Session.openRepo(fx.repo, undefined);
-		await session.draftRestore(c4, "link", "parent");
+		await draftFileRestore(session, c4, "link", "parent");
 		expect((await file(c4, "link")).status).toBe("=");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("ls-tree", "HEAD", "link").split(" ")[0]).toBe("120000");
@@ -91,29 +92,29 @@ describe("session drafts", () => {
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
 		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
-		await session.draftSetFile(c3, "run.sh", null);
-		await session.draftSetFile(c3, "extra.txt", Buffer.from("extra\n"));
-		await session.draftRestore(c3, "run.sh", "commit");
-		await session.draftRestore(c3, "extra.txt", "commit");
+		await draftFile(session, c3, "run.sh", null);
+		await draftFile(session, c3, "extra.txt", Buffer.from("extra\n"));
+		await draftFileRestore(session, c3, "run.sh", "commit");
+		await draftFileRestore(session, c3, "extra.txt", "commit");
 		expect(await drafts()).toEqual([]);
 	});
 
 	test("a draft write that would drop other entries is refused", async () => {
 		fx.git("rm", "-q", "a.txt");
 		const c3 = fx.commit("a.txt becomes a directory", { "a.txt/inner.txt": "inner\n" });
-		await session.draftSetFile(c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
-		await expect(session.draftSetFile(c3, "a.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await draftFile(session, c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
+		await expect(draftFile(session, c3, "a.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
 		expect((await file(c3, "a.txt/inner.txt")).draft?.toString()).toBe("edited inner\n");
 		const c4 = fx.commit("b.txt goes away", { "b.txt": null });
-		await session.draftSetFile(c4, "b.txt", Buffer.from("back as a file\n"));
-		await expect(session.draftSetFile(c4, "b.txt/under.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await draftFile(session, c4, "b.txt", Buffer.from("back as a file\n"));
+		await expect(draftFile(session, c4, "b.txt/under.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
 	});
 
 	test("restoring across a file/directory change is refused rather than dropping drafted files", async () => {
 		fx.git("rm", "-q", "a.txt");
 		const c3 = fx.commit("a.txt becomes a directory", { "a.txt/inner.txt": "inner\n" });
-		await session.draftSetFile(c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
-		await expect(session.draftRestore(c3, "a.txt", "parent")).rejects.toBeInstanceOf(ErrorEditRefused);
+		await draftFile(session, c3, "a.txt/inner.txt", Buffer.from("edited inner\n"));
+		await expect(draftFileRestore(session, c3, "a.txt", "parent")).rejects.toBeInstanceOf(ErrorEditRefused);
 		expect((await file(c3, "a.txt/inner.txt")).draft?.toString()).toBe("edited inner\n");
 	});
 
@@ -123,8 +124,8 @@ describe("session drafts", () => {
 		chmodSync(join(fx.dir, "run.sh"), 0o755);
 		fx.git("add", "--chmod=+x", "run.sh");
 		const c3 = fx.commit("c3", {});
-		await session.draftSetFile(c3, "run.sh", null);
-		await session.draftSetFile(c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
+		await draftFile(session, c3, "run.sh", null);
+		await draftFile(session, c3, "run.sh", Buffer.from("#!/bin/sh\necho again\n"));
 		const before = fx.git("rev-parse", "HEAD");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("reflog", "-1", "--format=%gs", "feature")).toBe(`suonetar: apply 1 commit from ${before}`);
@@ -132,17 +133,17 @@ describe("session drafts", () => {
 	});
 
 	test("a draft from another branch is not blended into this branch's view and cannot be extended here", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from("feature edit\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("feature edit\n"));
 		fx.git("switch", "-q", "-c", "feature-2");
 		expect((await drafts()).map((d) => d.kind)).toEqual(["elsewhere"]);
 		expect((await file(c1, "a.txt")).draft?.toString()).toBe(lineSet(lines("a"), 2, "c1"));
-		await expect(session.draftSetFile(c1, "a.txt", Buffer.from("other\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await expect(draftFile(session, c1, "a.txt", Buffer.from("other\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
 		await session.draftAdopt(c1);
 		expect((await file(c1, "a.txt")).draft?.toString()).toBe("feature edit\n");
 	});
 
 	test("drafts persist across sessions and survive gc --prune=now", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from("precious draft\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("precious draft\n"));
 		session.close();
 		fx.git("reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all");
 		fx.git("gc", "-q", "--prune=now");
@@ -152,7 +153,7 @@ describe("session drafts", () => {
 	});
 
 	test("an externally amended commit gets the draft rebased onto it, pending confirmation", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "c1"), 9, "draft")));
+		await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "c1"), 9, "draft")));
 		// Claude Code amends every commit in a rebase: new SHAs, same author lines.
 		fx.git("rebase", "-q", "-x", "git commit -q --amend --no-edit --allow-empty", "HEAD~2");
 		const statuses = await drafts();
@@ -165,7 +166,7 @@ describe("session drafts", () => {
 	});
 
 	test("a draft whose commit was squashed away becomes an orphan that is kept", async () => {
-		await session.draftSetFile(c2, "b.txt", Buffer.from("orphaned edit\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("orphaned edit\n"));
 		fx.git("reset", "-q", "--soft", "HEAD~2");
 		fx.git("commit", "-q", "-m", "squashed");
 		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
@@ -175,7 +176,7 @@ describe("session drafts", () => {
 
 	test("a draft on a pushed commit waits below a narrowed base and comes back once the branch is pushed", async () => {
 		fx.git("update-ref", "refs/remotes/origin/feature", c2);
-		await session.draftSetFile(c1, "a.txt", Buffer.from("edit to a pushed commit\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("edit to a pushed commit\n"));
 		expect((await drafts()).map((d) => d.kind)).toEqual(["current"]);
 		const c3 = fx.commit("c3", { "c.txt": "c3\n" });
 		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
@@ -216,13 +217,13 @@ describe("session drafts", () => {
 		fx.write("x.bin", "pointer\n");
 		fx.git("add", ".gitattributes", "x.bin");
 		const c3 = fx.commit("c3", {});
-		await expect(session.draftSetFile(c3, "link", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
-		await expect(session.draftSetFile(c3, "x.bin", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await expect(draftFile(session, c3, "link", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await expect(draftFile(session, c3, "x.bin", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
 	});
 
 	test("a conflict is resolved in the session and then applied", async () => {
 		const c3 = fx.commit("c3", { "a.txt": lineSet(lines("a"), 2, "c3") });
-		await session.draftSetFile(c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "suonetar")));
+		await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "suonetar")));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
 			throw new Error(`expected conflict, got ${preview.kind}`);
@@ -254,7 +255,7 @@ describe("session drafts", () => {
 		fx.git("config", "gpg.program", stub);
 		fx.git("config", "commit.gpgSign", "true");
 		fx.git("config", "user.signingKey", "fake");
-		await session.draftSetFile(c1, "a.txt", Buffer.from("signed edit\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("signed edit\n"));
 		expect((await session.preview()).kind).toBe("clean");
 		expect(await session.apply({ kind: "run", skip: [] }, () => undefined)).toEqual({ kind: "published", warning: undefined, hookChanges: [], hookless: [] });
 		expect(fx.git("cat-file", "commit", "HEAD")).toContain("gpgsig");
@@ -263,7 +264,7 @@ describe("session drafts", () => {
 	});
 	test("generation changes when the branch moves, a draft is saved, or a push or fetch moves a remote branch", async () => {
 		const first = await session.generation();
-		await session.draftSetFile(c1, "a.txt", Buffer.from("draft\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("draft\n"));
 		const second = await session.generation();
 		fx.commit("c3", { "c.txt": "c\n" });
 		const third = await session.generation();
@@ -278,21 +279,21 @@ describe("session drafts", () => {
 		fx.git("cherry-pick", c2);
 		fx.git("branch", "-f", "feature", "HEAD");
 		fx.git("switch", "-q", "feature");
-		await session.draftSetFile(c1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "c1"), 9, "typed late")));
+		await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "c1"), 9, "typed late")));
 		expect((await drafts()).map((d) => d.kind)).toEqual(["rebased"]);
 	});
 
 	test("saving works while HEAD is detached, for a commit that already has a draft", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from("first\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("first\n"));
 		fx.git("switch", "-q", "--detach", "HEAD");
-		await session.draftSetFile(c1, "a.txt", Buffer.from("second\n"));
-		await expect(session.draftSetFile(c2, "b.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await draftFile(session, c1, "a.txt", Buffer.from("second\n"));
+		await expect(draftFile(session, c2, "b.txt", Buffer.from("x\n"))).rejects.toBeInstanceOf(ErrorEditRefused);
 		fx.git("switch", "-q", "feature");
 		expect((await file(c1, "a.txt")).draft?.toString()).toBe("second\n");
 	});
 
 	test("drafts from another branch are listed apart and can be adopted", async () => {
-		await session.draftSetFile(c2, "b.txt", Buffer.from("from feature\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("from feature\n"));
 		fx.git("switch", "-q", "-c", "other");
 		expect((await drafts()).map((d) => d.kind)).toEqual(["elsewhere"]);
 		expect((await session.preview()).kind).toBe("nothing");
@@ -301,7 +302,7 @@ describe("session drafts", () => {
 	});
 
 	test("an orphaned draft can still be looked at, and a discarded one stays in the store's reflog", async () => {
-		await session.draftSetFile(c2, "b.txt", Buffer.from("orphaned edit\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("orphaned edit\n"));
 		fx.git("reset", "-q", "--hard", "HEAD~1");
 		expect((await drafts()).map((d) => d.kind)).toEqual(["orphan"]);
 		const doc = await session.draftDocument(c2);
@@ -319,7 +320,7 @@ describe("session drafts", () => {
 		fx.symlinkStage("link", "a.txt");
 		const c3 = fx.commit("c3", {});
 		expect((await file(c3, "link")).refusal).toContain("symbolic link");
-		await expect(session.draftSetFile(c3, "link/x", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
+		await expect(draftFile(session, c3, "link/x", Buffer.from("x"))).rejects.toBeInstanceOf(ErrorEditRefused);
 	});
 
 	test("each file carries its EditorConfig indentation, as of the version shown", async () => {
@@ -330,7 +331,7 @@ describe("session drafts", () => {
 		// A deleted file keeps the indentation it had, though its directory's config went with it.
 		expect(sizes(await session.commitDocument(c4))).toMatchObject({ "sub/x.cs": 3, "y.cs": 4 });
 		// A draft that edits the config takes effect, in the commit's document and the draft's own.
-		await session.draftSetFile(c4, ".editorconfig", Buffer.from("[*]\nindent_size = 2\n"));
+		await draftFile(session, c4, ".editorconfig", Buffer.from("[*]\nindent_size = 2\n"));
 		expect(sizes(await session.commitDocument(c4))).toMatchObject({ "y.cs": 2 });
 		expect(sizes(await session.draftDocument(c4))).toMatchObject({ ".editorconfig": 2 });
 	});

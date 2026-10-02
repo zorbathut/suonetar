@@ -51,7 +51,8 @@ If the branch is somewhere else entirely, another process moved it. Suonetar's r
 
 ## What survives what
 
-- Drafts and conflict resolutions live under `refs/suonetar/drafts`, survive `git gc --prune=now`, and the ref has its own reflog, so discarded drafts stay recoverable (`.git/logs/refs/suonetar/drafts` lists every state; `git reflog` does not display them because they are trees, not commits).
+- Drafts and conflict resolutions live under `refs/suonetar/drafts`, survive `git gc --prune=now`, and the ref has its own reflog, so discarded drafts stay recoverable (`.git/logs/refs/suonetar/drafts` lists every state; `git reflog` does not display them because they are trees, not commits). A draft made on top of edits below it also keeps the parent tree it was made on, so later edits below merge into it rather than being undone by it.
+- The restacked stack Suonetar shows is merged into `.git/suonetar/objects-<host>-<pid>-*`, a private object directory per open window, so that restacking on every edit does not fill the repository's own objects; saving an edit writes only what it stores and the merges below it. The directory is removed when the window closes, and one left by a process on the same machine that is gone is removed the next time Suonetar opens the repository; it can be deleted by hand at any time when Suonetar is not running. Nothing stored points into it.
 - Every commit Suonetar replaces stays in the branch reflog until `git gc` prunes it, after `gc.reflogExpireUnreachable` (30 days by default), as with a rebase. So do the stored drafts' old states. `git reflog expire --expire-unreachable=now` followed by `git gc --prune=now` removes them.
 
 ## Undoing by hand

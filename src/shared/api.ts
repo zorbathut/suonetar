@@ -1,9 +1,10 @@
+import type { MergeInputs } from "../engine/derive.ts";
 import type { Indentation } from "../engine/editorconfig.ts";
-import type { MergeInputs } from "../engine/replay.ts";
 import type {
 	ApplyProgress,
 	ApplyResult,
 	CommitDocument,
+	ConflictReport,
 	HookChoice,
 	MergetoolOutcome,
 	PreviewResult,
@@ -28,11 +29,14 @@ export type SuonetarApi = {
 	readonly state: () => Promise<Result<Wire<SessionState>>>;
 	readonly generation: () => Promise<Result<string>>;
 	readonly commitDocument: (oid: string) => Promise<Result<Wire<CommitDocument>>>;
+	// The conflict restacking a commit runs into.
+	readonly commitConflict: (oid: string) => Promise<Result<Wire<ConflictReport>>>;
 	readonly draftDocument: (against: string) => Promise<Result<Wire<CommitDocument>>>;
 	readonly blob: (oid: string) => Promise<Result<Uint8Array | undefined>>;
 	readonly blobAt: (tree: string, path: string) => Promise<Result<Uint8Array | undefined>>;
-	readonly draftSetFile: (oid: string, path: string, content: Uint8Array | null) => Promise<Result<undefined>>;
-	readonly draftRestore: (oid: string, path: string, from: "commit" | "parent") => Promise<Result<undefined>>;
+	// Saves a file as edited in a document showing the commit on `parentTree`, where the file was blob `shown` (null: absent); returns the blob now stored (null: deleted).
+	readonly draftSetFile: (oid: string, parentTree: string, path: string, shown: string | null, content: Uint8Array | null) => Promise<Result<string | null>>;
+	readonly draftRestore: (oid: string, parentTree: string, path: string, from: "commit" | "parent") => Promise<Result<undefined>>;
 	readonly draftSetMessage: (oid: string, message: Uint8Array | null) => Promise<Result<undefined>>;
 	readonly draftDiscard: (against: string) => Promise<Result<undefined>>;
 	readonly draftConfirm: (against: string) => Promise<Result<undefined>>;

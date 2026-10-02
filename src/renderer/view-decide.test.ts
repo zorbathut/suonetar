@@ -3,7 +3,14 @@ import { type StackSummary, viewDecide, WORKTREE_REBUILD_MS, worktreePollAction 
 
 const c = (oid: string, authorLine: string, subject: string) => ({ oid, authorLine, subject });
 const commits = [c("o1", "A 1", "one"), c("o2", "A 2", "two"), c("o3", "A 3", "three")];
-const summary = (over: Partial<StackSummary> = {}): StackSummary => ({ commits, pending: new Set(), drafts: new Set(), worktree: { staged: 0, unstaged: 0 }, ...over });
+const summary = (over: Partial<StackSummary> = {}): StackSummary => ({
+	commits,
+	pending: new Set(),
+	drafts: new Set(),
+	conflicted: new Set(),
+	worktree: { staged: 0, unstaged: 0 },
+	...over,
+});
 const sel = (index: number) => ({ ...(commits[index] ?? c("x", "x", "x")), index });
 
 describe("viewDecide", () => {
@@ -35,8 +42,29 @@ describe("viewDecide", () => {
 		expect(viewDecide(summary(), { kind: "draft", against: "gone" }, sel(2))).toEqual({ kind: "commit", oid: "o3", readOnly: false });
 	});
 
-	it("never replaces the resolve or hook view", () => {
-		expect(viewDecide(summary({ commits: [] }), { kind: "resolve" }, sel(0))).toEqual({ kind: "keep" });
+	it("shows a conflicted commit's conflict, from the start, on following it, and when its open view starts conflicting", () => {
+		const conflicted = new Set(["o3"]);
+		expect(viewDecide(summary({ conflicted }), { kind: "none" }, undefined)).toEqual({ kind: "resolve", oid: "o3" });
+		const rewritten = [c("n1", "A 1", "one"), c("n2", "A 2", "two"), c("n3", "A 3", "three")];
+		expect(viewDecide(summary({ commits: rewritten, conflicted: new Set(["n3"]) }), { kind: "commit", oid: "o3", readOnly: false }, sel(2))).toEqual({
+			kind: "resolve",
+			oid: "n3",
+		});
+		expect(viewDecide(summary({ conflicted }), { kind: "commit", oid: "o3", readOnly: false }, sel(2))).toEqual({ kind: "resolve", oid: "o3" });
+	});
+
+	it("keeps a conflict while it stands, and shows the commit once it is gone", () => {
+		expect(viewDecide(summary({ conflicted: new Set(["o2"]) }), { kind: "resolve", oid: "o2" }, sel(1))).toEqual({ kind: "keep" });
+		expect(viewDecide(summary(), { kind: "resolve", oid: "o2" }, sel(1))).toEqual({ kind: "commit", oid: "o2", readOnly: false });
+		const rewritten = [c("n1", "A 1", "one"), c("n2", "A 2", "two"), c("n3", "A 3", "three")];
+		expect(viewDecide(summary({ commits: rewritten }), { kind: "resolve", oid: "o2" }, sel(1))).toEqual({ kind: "commit", oid: "n2", readOnly: false });
+	});
+
+	it("shows a commit whose draft waits for confirmation read-only, though it conflicts", () => {
+		expect(viewDecide(summary({ conflicted: new Set(["o3"]), pending: new Set(["o3"]) }), { kind: "none" }, undefined)).toEqual({ kind: "commit", oid: "o3", readOnly: true });
+	});
+
+	it("never replaces the hook view", () => {
 		expect(viewDecide(summary({ commits: [] }), { kind: "hook" }, sel(0))).toEqual({ kind: "keep" });
 	});
 

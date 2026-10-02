@@ -66,6 +66,8 @@ type Section = {
 	// The editor's text differs from the commit's version; updated as saves land.
 	edited: boolean;
 	commitText: string | undefined;
+	// The blob a save is laid onto, which the engine checks is still there: the file as shown, then as last saved.
+	shownOid: string | undefined;
 };
 
 const LARGE_LINES = 5000;
@@ -154,7 +156,17 @@ export class CommitView {
 					worktree.conflicted ? "The index has unresolved conflicts (a merge or rebase stopped); conflicted files are shown against our side." : "",
 					worktree.omitted > 0 ? `${worktree.omitted} more file${worktree.omitted === 1 ? " is" : "s are"} not shown.` : "",
 				].filter((n) => n !== "");
-				const doc: Doc = { oid: "", parent: "", subject: worktreeLabel(source.side), message: new Uint8Array(), draftMessage: undefined, hasDraft: false, files: worktree.files };
+				const doc: Doc = {
+					oid: "",
+					parent: "",
+					parentTree: "",
+					tree: "",
+					subject: worktreeLabel(source.side),
+					message: new Uint8Array(),
+					draftMessage: undefined,
+					hasDraft: false,
+					files: worktree.files,
+				};
 				return { doc, notes };
 			}
 			default: {
@@ -383,8 +395,10 @@ export class CommitView {
 			expanded: !large,
 			collapsedAtFirst: large,
 			mine: false,
-			edited: !bytesEqual(file.draft, file.commit),
+			// Where the commit's own version is unknown (restacking it conflicts), the user's edits cannot be told apart.
+			edited: !file.mineUnknown && !bytesEqual(file.draft, file.commit),
 			commitText: undefined,
+			shownOid: file.draftOid,
 		};
 		header.addEventListener("click", () => {
 			if (!section.expanded) {
@@ -481,7 +495,7 @@ export class CommitView {
 			if (view === undefined) {
 				return;
 			}
-			if (!s.edited) {
+			if (!s.edited && !f.mineUnknown) {
 				s.edited = true;
 				this.#headerUpdate(s);
 			}
@@ -491,8 +505,8 @@ export class CommitView {
 					return;
 				}
 				const text = view.state.doc.toString();
-				await call(api.draftSetFile(oid, f.path, saveBytesFile(text, codec, f)));
-				const edited = text !== this.#commitText(s);
+				s.shownOid = (await call(api.draftSetFile(oid, this.#doc.parentTree, f.path, s.shownOid ?? null, saveBytesFile(text, codec, f)))) ?? undefined;
+				const edited = !f.mineUnknown && text !== this.#commitText(s);
 				if (edited !== s.edited) {
 					s.edited = edited;
 					this.#headerUpdate(s);
@@ -509,6 +523,11 @@ export class CommitView {
 		}
 		if (f.refusal !== undefined) {
 			s.badges.append(el("span", { class: "badge", text: "read-only" }));
+		}
+		if (f.provisional) {
+			s.badges.append(
+				el("span", { class: "badge badge-warn", text: "without edits below", title: "A conflict below is not resolved yet, so this file is shown without the edits below it." }),
+			);
 		}
 		s.actions.replaceChildren();
 		if (!this.#editable || s.opaque) {
@@ -552,7 +571,7 @@ export class CommitView {
 		const oid = this.#doc.oid;
 		const path = s.file.path;
 		this.#rework("Restoring the file", async () => {
-			await call(api.draftRestore(oid, path, from));
+			await call(api.draftRestore(oid, this.#doc.parentTree, path, from));
 			await this.#host.reload(path);
 		});
 	}

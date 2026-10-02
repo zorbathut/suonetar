@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Oid } from "./git.ts";
 import { type HookChoice, Session } from "./session.ts";
+import { draftFile } from "./test-support/drafts.ts";
 import { type Fixture, lineSet, lines, repoFixture, shPath } from "./test-support/repo.ts";
 import { TIMEOUT_SCALE } from "./test-support/timeout.ts";
 
@@ -55,7 +56,7 @@ describe("pre-commit hooks at apply", () => {
 	}
 
 	test("without a hook nothing runs and no worktree is created", async () => {
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(existsSync(join(fx.dir, ".git", "suonetar", "wt"))).toBe(false);
 	});
@@ -63,7 +64,7 @@ describe("pre-commit hooks at apply", () => {
 	test("the hook runs once per rewritten commit, in the private worktree, with the commit's change staged", async () => {
 		hookInstall(LOGGING.replace("$LOG", log));
 		const statusBefore = fx.git("status", "--porcelain");
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		const result = await apply();
 		expect(result.kind).toBe("published");
 		const wt = shPath(realpathSync.native(join(fx.dir, ".git", "suonetar", "wt")));
@@ -83,7 +84,7 @@ for f in $(git diff --cached --name-only --diff-filter=ACM); do
   if grep -q ' $' "$f"; then sed -i 's/ *$//' "$f"; changed=1; fi
 done
 exit $changed`);
-		await session.draftSetFile(c1, "f.txt", Buffer.from("one  \nTWO  \nthree  \nfour\nfive\n"));
+		await draftFile(session, c1, "f.txt", Buffer.from("one  \nTWO  \nthree  \nfour\nfive\n"));
 		const result = await apply();
 		if (result.kind !== "published") {
 			throw new Error(`apply: ${JSON.stringify(result)}`);
@@ -101,7 +102,7 @@ exit $changed`);
 	test("with core.autocrlf on, as Git for Windows sets it, hook changes land in repository form and files in checkout form", async () => {
 		fx.git("config", "core.autocrlf", "true");
 		hookInstall(`for f in $(git diff --cached --name-only); do echo fixed >> "$f"; done; exit 0`);
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(show("HEAD~1", "b.txt")).toBe("edited\nfixed");
 		expect(readFileSync(join(fx.dir, "b.txt"), "utf8")).toBe("edited\r\nfixed\r\n");
@@ -113,7 +114,7 @@ exit $changed`);
 		c1 = fx.commit("c1", { "f.txt": "x  \n" });
 		c2 = fx.commit("c2", { "f.txt": null });
 		hookInstall(`for f in $(git diff --cached --name-only --diff-filter=ACM); do sed -i 's/ *$//' "$f"; git add "$f"; done`);
-		await session.draftSetFile(c1, "h.txt", Buffer.from("h\n"));
+		await draftFile(session, c1, "h.txt", Buffer.from("h\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(show("HEAD~1", "f.txt")).toBe("x");
 		expect(fx.gitTry("cat-file", "-e", "HEAD:f.txt").code).not.toBe(0);
@@ -121,7 +122,7 @@ exit $changed`);
 
 	test("a hook that stages its own fix and exits 0 is taken as is; unrelated files it touches are left out", async () => {
 		hookInstall(`for f in $(git diff --cached --name-only); do echo fixed >> "$f"; git add "$f"; done; echo stray >> a.txt; exit 0`);
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(show("HEAD~1", "b.txt")).toBe("edited\nfixed");
 		expect(show("HEAD~1", "a.txt")).toBe(lineSet(lines("a"), 2, "c1").trimEnd());
@@ -129,7 +130,7 @@ exit $changed`);
 
 	test("a failing hook stops the apply with its output, and nothing changes", async () => {
 		hookInstall(`echo "lint: something is wrong" >&2; exit 2`);
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		const tip = fx.git("rev-parse", "HEAD");
 		const result = await apply();
 		if (result.kind !== "hook-failed") {
@@ -146,7 +147,7 @@ exit $changed`);
 
 	test("a hook that changes files on every run fails as unsettled", async () => {
 		hookInstall(`for f in $(git diff --cached --name-only); do echo more >> "$f"; done; exit 1`);
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		const result = await apply();
 		expect(result.kind === "hook-failed" ? [result.failure, result.changed] : result.kind).toEqual(["unsettled", ["b.txt"]]);
 	});
@@ -155,13 +156,13 @@ exit $changed`);
 		const flag = shPath(join(fx.dir, ".git", "fail-on"));
 		hookInstall(`if git diff --cached --name-only | grep -qx "$(cat ${flag})"; then exit 1; fi; ${LOGGING.replace("$LOG", log)}`);
 		writeFileSync(flag, "b.txt");
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("hook-failed");
 		const result = await apply({ kind: "run", skip: [c2] });
 		expect(result.kind).toBe("published");
 		expect(logLines().map((l) => l.split("|")[1])).toEqual(["c.txt,"]);
 		const c2New = fx.git("rev-parse", "HEAD~1");
-		await session.draftSetFile(c2New, "b.txt", Buffer.from("edited again\n"));
+		await draftFile(session, c2New, "b.txt", Buffer.from("edited again\n"));
 		rmSync(log);
 		expect((await apply({ kind: "skip" })).kind).toBe("published");
 		expect(logLines()).toEqual([]);
@@ -171,7 +172,7 @@ exit $changed`);
 		const flag = shPath(join(fx.dir, ".git", "fail-on"));
 		hookInstall(`${LOGGING.replace("$LOG", log)}; if git diff --cached --name-only | grep -qx "$(cat ${flag})"; then exit 1; fi`);
 		writeFileSync(flag, "c.txt");
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("hook-failed");
 		expect(logLines().length).toBe(2);
 		writeFileSync(flag, "nothing");
@@ -189,7 +190,7 @@ exit $changed`);
 	test("cancelling stops a hanging hook, and the next apply works", async () => {
 		const started = shPath(join(fx.dir, ".git", "started"));
 		hookInstall(`touch ${started}; sleep 30`);
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		const running = apply();
 		for (let i = 0; i < 200 && !existsSync(started); i++) {
 			await new Promise((r) => setTimeout(r, 25));
@@ -205,7 +206,7 @@ exit $changed`);
 	test("config-based hooks are found and run", async () => {
 		fx.git("config", "hook.check.event", "pre-commit");
 		fx.git("config", "hook.check.command", `echo ran >> ${log}`);
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(logLines()).toEqual(["ran"]);
 	});
@@ -214,7 +215,7 @@ exit $changed`);
 		fx.write(".gitignore", "_hooks/\n");
 		hookInstall(LOGGING.replace("$LOG", log), join(fx.dir, "_hooks", "pre-commit"));
 		fx.git("config", "core.hooksPath", "_hooks");
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(logLines().length).toBe(1);
 	});
@@ -229,7 +230,7 @@ exit $changed`);
 		const c = fx.commit("change", { "c.txt": "c\n" });
 		fx.git("config", "core.hooksPath", "hooks");
 		const before = fx.git("rev-parse", "HEAD~2");
-		await session.draftSetFile(before, "a.txt", Buffer.from("edited\n"));
+		await draftFile(session, before, "a.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		// The v2 commit changes the hook, and is checked by its own new version.
 		expect(logLines()).toEqual(["v1", "v2", "v2"]);
@@ -238,10 +239,10 @@ exit $changed`);
 
 	test("a deleted worktree directory is recreated", async () => {
 		hookInstall("exit 0");
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		rmSync(join(fx.dir, ".git", "suonetar", "wt"), { recursive: true, force: true });
-		await session.draftSetFile(fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited again\n"));
+		await draftFile(session, fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited again\n"));
 		expect((await apply()).kind).toBe("published");
 	});
 
@@ -251,7 +252,7 @@ exit $changed`);
 		try {
 			mkdirSync(join(fx.dir, ".git", "suonetar"), { recursive: true });
 			writeFileSync(join(fx.dir, ".git", "suonetar", "wt.lock"), String(other.pid));
-			await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+			await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 			expect((await apply()).kind).toBe("busy");
 		} finally {
 			other.kill();
@@ -261,7 +262,7 @@ exit $changed`);
 
 	test("a cancel pressed before the hook pass starts still cancels", async () => {
 		hookInstall(LOGGING.replace("$LOG", log));
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		const tip = fx.git("rev-parse", "HEAD");
 		const running = apply();
 		session.cancel();
@@ -275,7 +276,7 @@ exit $changed`);
 		try {
 			hookInstall(LOGGING.replace("$LOG", log), join(shared, "pre-commit"));
 			fx.git("config", "core.hooksPath", `../${basename(shared)}`);
-			await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+			await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 			expect((await apply()).kind).toBe("published");
 			expect(logLines().length).toBe(1);
 		} finally {
@@ -288,7 +289,7 @@ exit $changed`);
 		const other = join(fx.dir, "..", `other-wt-${Date.now()}`);
 		fx.git("worktree", "add", "-q", "--detach", other, "main");
 		rmSync(other, { recursive: true, force: true });
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		expect(fx.git("worktree", "list", "--porcelain")).toContain(basename(other));
 	});
@@ -303,7 +304,7 @@ for f in $(git diff --cached --name-only --diff-filter=ACM); do
   if grep -q ' $' "$f"; then sed -i 's/ *$//' "$f"; changed=1; fi
 done
 exit $changed`);
-		await session.draftSetFile(c1, "f.txt", Buffer.from("one  \nTWO  \nthree  \nfour\nfive\n"));
+		await draftFile(session, c1, "f.txt", Buffer.from("one  \nTWO  \nthree  \nfour\nfive\n"));
 		expect((await apply()).kind).toBe("hook-failed");
 		expect((await apply({ kind: "run", skip: [c2] })).kind).toBe("published");
 		expect(show("HEAD", "f.txt")).toBe("one\nTWO\nthree\nfour\nFIVE");
@@ -318,7 +319,7 @@ for f in $(git diff --cached --name-only --diff-filter=ACM); do
 done
 exit $changed`);
 		const tip = fx.git("rev-parse", "HEAD");
-		await session.draftSetFile(c1, "f.txt", Buffer.from("one  \ntwo\n"));
+		await draftFile(session, c1, "f.txt", Buffer.from("one  \ntwo\n"));
 		expect((await apply()).kind).toBe("hook-reverted");
 		expect(fx.git("rev-parse", "HEAD")).toBe(tip);
 		const state = await session.state();
@@ -339,7 +340,7 @@ exit $changed`);
 		fx.git("update-ref", "refs/heads/feature", big);
 		fx.git("read-tree", "-m", "-u", c1, big);
 		hookInstall("exit 0");
-		await session.draftSetFile(c1, "a.txt", Buffer.from("edited again\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("edited again\n"));
 		expect((await apply()).kind).toBe("published");
 	});
 
@@ -348,7 +349,7 @@ exit $changed`);
 		c1 = fx.commit("c1", { "a.txt": "c1\n" });
 		c2 = fx.commit("c2", { gen: "a file named gen\n" });
 		hookInstall(`if git diff --cached --name-only | grep -qx a.txt; then mkdir -p gen; echo made > gen/x; git add gen/x; fi; exit 0`);
-		await session.draftSetFile(c1, "a.txt", Buffer.from("c1 edited\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("c1 edited\n"));
 		const result = await apply();
 		expect(result.kind === "hook-failed" ? [result.failure, result.changed] : result.kind).toEqual(["collision", ["gen/x"]]);
 	});
@@ -363,7 +364,7 @@ exit $changed`);
 		fx.git("add", "hooks");
 		fx.git("commit", "-qm", "add pre-commit");
 		fx.git("config", "core.hooksPath", "hooks");
-		await session.draftSetFile(c1, "a.txt", Buffer.from("c1 edited\n"));
+		await draftFile(session, c1, "a.txt", Buffer.from("c1 edited\n"));
 		const result = await apply();
 		if (result.kind !== "published") {
 			throw new Error(`apply: ${JSON.stringify(result)}`);
@@ -376,7 +377,7 @@ exit $changed`);
 		const once = shPath(join(fx.dir, ".git", "moved-once"));
 		hookInstall(`${LOGGING.replace("$LOG", log)}
 if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touch ${once}; env -u GIT_DIR -u GIT_INDEX_FILE git -C ${shPath(fx.dir)} commit -q --no-verify --allow-empty -m claude; fi`);
-		await session.draftSetFile(c2, "b.txt", Buffer.from("edited\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("moved");
 		expect(logLines().length).toBe(2);
 		expect((await apply()).kind).toBe("published");
@@ -386,23 +387,23 @@ if git diff --cached --name-only | grep -qx c.txt && [ ! -e ${once} ]; then touc
 
 	test("a broken private worktree or a stale lock inside it is repaired", async () => {
 		hookInstall("exit 0");
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		expect((await apply()).kind).toBe("published");
 		const wt = join(fx.dir, ".git", "suonetar", "wt");
 		const admin = fx.git("-C", wt, "rev-parse", "--absolute-git-dir");
 		writeFileSync(join(admin, "index.lock"), "");
-		await session.draftSetFile(fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited twice\n"));
+		await draftFile(session, fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited twice\n"));
 		expect((await apply()).kind).toBe("published");
 		// Removed first: Git for Windows marks it hidden, and Windows will not overwrite a hidden file.
 		rmSync(join(wt, ".git"));
 		writeFileSync(join(wt, ".git"), "gitdir: /nowhere\n");
-		await session.draftSetFile(fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited thrice\n"));
+		await draftFile(session, fx.git("rev-parse", "HEAD"), "c.txt", Buffer.from("edited thrice\n"));
 		expect((await apply()).kind).toBe("published");
 	});
 
 	test("when the hook machinery itself fails, the apply says so instead of throwing", async () => {
 		hookInstall("exit 0");
-		await session.draftSetFile(c3, "c.txt", Buffer.from("edited\n"));
+		await draftFile(session, c3, "c.txt", Buffer.from("edited\n"));
 		// A directory where the worktree's lock file goes cannot be read as one.
 		mkdirSync(join(fx.dir, ".git", "suonetar", "wt.lock"), { recursive: true });
 		const result = await apply();

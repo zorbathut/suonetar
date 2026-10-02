@@ -28,8 +28,15 @@ export function stackSummary(ready: Ready, worktree: Worktree): StackSummary {
 		commits,
 		pending: new Set(commits.filter((c) => draftPendingFor(ready, c.oid) !== undefined).map((c) => c.oid)),
 		drafts: new Set(ready.drafts.map((d) => d.draft.meta.against)),
+		conflicted: new Set(ready.commits.filter((c) => c.kind === "conflict").map((c) => c.oid)),
 		worktree: { staged: worktree.staged, unstaged: worktree.unstaged },
 	};
+}
+
+export type CommitStatus = Ready["commits"][number];
+
+export function commitStatusFor(ready: Ready, oid: string): CommitStatus | undefined {
+	return ready.commits.find((c) => c.oid === oid);
 }
 
 export function worktreeLabel(side: WorktreeSide): string {
@@ -67,7 +74,7 @@ export type StackSelection = { readonly oid: string } | { readonly side: Worktre
 export function stackRender(container: HTMLElement, ready: Ready, worktree: Worktree, selection: StackSelection, handlers: StackViewHandlers): void {
 	const selected = selection === undefined ? undefined : "oid" in selection ? selection.oid : `worktree:${selection.side}`;
 	const stack = ready.stack;
-	const edited = new Set(ready.drafts.flatMap((d) => (d.kind === "current" ? [d.commit.oid] : [])));
+	const statuses = new Map(ready.commits.map((c) => [c.oid, c.kind]));
 	const rows = el("div", { class: "commit-rows" });
 	for (const side of ["unstaged", "staged"] as const) {
 		const count = worktree[side];
@@ -87,7 +94,12 @@ export function stackRender(container: HTMLElement, ready: Ready, worktree: Work
 	}
 	for (const commit of [...stack.commits].reverse()) {
 		const badges = el("span", { class: "badges" });
-		if (edited.has(commit.oid)) {
+		const status = statuses.get(commit.oid);
+		if (status === "conflict") {
+			badges.append(el("span", { class: "badge badge-warn", text: "conflict", title: "Restacking it onto the edits below conflicts; select it to resolve" }));
+		} else if (status === "resolved") {
+			badges.append(el("span", { class: "badge badge-draft", text: "resolved", title: "A conflict in it was resolved; not yet applied" }));
+		} else if (status === "edited") {
 			badges.append(el("span", { class: "badge badge-draft", text: "edited", title: "Has edits not yet applied" }));
 		}
 		if (draftPendingFor(ready, commit.oid) !== undefined) {

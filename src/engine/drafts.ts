@@ -1,8 +1,8 @@
+import type { Edit } from "./derive.ts";
 import { ErrorEditRefused } from "./errors.ts";
 import { gitOk, type Oid, type Repo, splitNul } from "./git.ts";
 import { mergeTrees } from "./merge.ts";
 import { treeList } from "./objects.ts";
-import type { Edit } from "./replay.ts";
 import type { Stack, StackCommit } from "./stack.ts";
 import type { DraftEntry, DraftMeta } from "./store.ts";
 import { blobWrite, type TreeChange, treeWithChanges } from "./write.ts";
@@ -29,8 +29,8 @@ export function draftMessage(draft: DraftEntry): Buffer | undefined {
 	return draft.meta.message === undefined ? undefined : Buffer.from(draft.meta.message, "base64");
 }
 
-function editOf(draft: DraftEntry, tree: Oid | undefined, parentTree: Oid | undefined): Edit {
-	return { tree, parentTree, message: draftMessage(draft) };
+function editOf(draft: DraftEntry, tree: Oid | undefined, parentTree: Oid | undefined, fallback: Edit["fallback"]): Edit {
+	return { tree, parentTree, message: draftMessage(draft), fallback };
 }
 
 // Maps stored drafts onto the current stack. Pure: nothing is written, so a preview never re-keys a draft behind the user's back.
@@ -55,7 +55,7 @@ export async function draftsResolve(repo: Repo, stack: Stack, baseTree: Oid, dra
 	for (const draft of here) {
 		const commit = byOid.get(draft.meta.against);
 		if (commit !== undefined) {
-			statuses.push({ kind: "current", draft, commit, parentTree: parentOf(commit), edit: editOf(draft, draft.tree, draft.parentTree) });
+			statuses.push({ kind: "current", draft, commit, parentTree: parentOf(commit), edit: editOf(draft, draft.tree, draft.parentTree, draft.fallback) });
 			claimed.add(commit.oid);
 		}
 	}
@@ -84,7 +84,7 @@ export async function draftsResolve(repo: Repo, stack: Stack, baseTree: Oid, dra
 			continue;
 		}
 		if (draft.tree === undefined) {
-			statuses.push({ kind: "rebased", draft, commit, parentTree, edit: editOf(draft, undefined, undefined) });
+			statuses.push({ kind: "rebased", draft, commit, parentTree, edit: editOf(draft, undefined, undefined, undefined) });
 			continue;
 		}
 		const merged = await mergeTrees(repo, draft.base, commit.tree, draft.tree);
@@ -114,7 +114,7 @@ export async function draftsResolve(repo: Repo, stack: Stack, baseTree: Oid, dra
 			}
 			draftParent = parentMerged === undefined ? draft.parentTree : parentMerged.tree;
 		}
-		statuses.push({ kind: "rebased", draft, commit, parentTree, edit: editOf(draft, merged.tree, draftParent) });
+		statuses.push({ kind: "rebased", draft, commit, parentTree, edit: editOf(draft, merged.tree, draftParent, undefined) });
 	}
 	return statuses;
 }
@@ -132,6 +132,7 @@ export function draftFor(commit: CommitBasics, branch: string, version: Version 
 		branch,
 		baseMessage: messageChanged ? commit.message.toString("base64") : undefined,
 		message: messageChanged ? message.toString("base64") : undefined,
+		origin: undefined,
 	};
 	return {
 		meta,
@@ -139,6 +140,7 @@ export function draftFor(commit: CommitBasics, branch: string, version: Version 
 		parentTree: version?.parentTree,
 		base: commit.tree,
 		baseParent: version === undefined ? undefined : commit.parentTree,
+		fallback: undefined,
 		entryOid: undefined,
 	};
 }

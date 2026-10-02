@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Oid } from "./git.ts";
 import { Session } from "./session.ts";
+import { draftFile } from "./test-support/drafts.ts";
 import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
 import { reflogMessage, reflogParse } from "./undo.ts";
 
@@ -79,7 +80,7 @@ describe("undo", () => {
 	});
 
 	test("puts back the exact commits, then redoes, then undoes again", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		expect(await undoInfo()).toEqual({ kind: "exact", verb: "undo", old: c3, new: appliedTip, commits: 3, pushed: 0 });
 
@@ -100,7 +101,7 @@ describe("undo", () => {
 	});
 
 	test("counts replaced commits that are already pushed, even once they sit below the base", async () => {
-		await session.draftSetFile(c2, "b.txt", Buffer.from("pushed edit\n"));
+		await draftFile(session, c2, "b.txt", Buffer.from("pushed edit\n"));
 		const appliedTip = await applied();
 		fx.git("update-ref", "refs/remotes/origin/main", appliedTip);
 		const state = await ready();
@@ -109,7 +110,7 @@ describe("undo", () => {
 	});
 
 	test("skips a move that was rolled back", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		const other = fx.git("commit-tree", "-p", appliedTip, "-m", "other", tree(appliedTip));
 		fx.git("update-ref", "-m", reflogMessage("apply", 1, appliedTip), "refs/heads/feature", other, appliedTip);
@@ -119,7 +120,7 @@ describe("undo", () => {
 	});
 
 	test("refuses over an uncommitted change to a file it would rewrite, and leaves the change alone", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		writeFileSync(join(fx.dir, "a.txt"), "mine\n");
 		expect((await undoNow()).kind).toBe("refused");
@@ -128,7 +129,7 @@ describe("undo", () => {
 	});
 
 	test("after commits on top, writes drafts that restore the replaced commits, and applying them keeps the new work", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		const c4 = fx.commit("c4", { "d.txt": "claude\n" });
 		const info = await undoInfo();
@@ -156,7 +157,7 @@ describe("undo", () => {
 	});
 
 	test("drafts for commits rewritten since show as rebased", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		await applied();
 		fx.git("rebase", "-q", "--force-rebase", "main");
 		expect(await undoNow()).toEqual({ kind: "drafted", verb: "undo", drafts: 1 });
@@ -170,7 +171,7 @@ describe("undo", () => {
 		const k2 = fx.commit("k2", { "a.txt": lineSet(lineSet(lines("a"), 2, "k1"), 3, "k2") });
 		session.close();
 		session = await Session.openRepo(fx.repo, undefined);
-		await session.draftSetFile(k1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "k1"), 3, "edit")));
+		await draftFile(session, k1, "a.txt", Buffer.from(lineSet(lineSet(lines("a"), 2, "k1"), 3, "edit")));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
 			throw new Error(`preview is ${preview.kind}`);
@@ -188,12 +189,12 @@ describe("undo", () => {
 	});
 
 	test("leaves an edit made on another branch alone, refusing rather than overwriting it", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		await applied();
 		fx.commit("c4", { "d.txt": "claude\n" });
 		const c1Applied = fx.git("rev-parse", "HEAD~3");
 		fx.git("switch", "-q", "-c", "other");
-		await session.draftSetFile(c1Applied, "b.txt", Buffer.from("elsewhere\n"));
+		await draftFile(session, c1Applied, "b.txt", Buffer.from("elsewhere\n"));
 		fx.git("switch", "-q", "feature");
 		expect((await undoInfo())?.kind).toBe("edits");
 		const refused = await undoNow();
@@ -204,7 +205,7 @@ describe("undo", () => {
 	});
 
 	test("is unavailable when a commit it would restore was dropped from the stack, or its entry is in an unknown form", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		fx.git("rebase", "-q", "--onto", "HEAD~2", "HEAD~1");
 		const dropped = await unavailableReason();
@@ -217,11 +218,11 @@ describe("undo", () => {
 	});
 
 	test("is unavailable while drafts exist, after a manual reset, or when the entry's commits are gone", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		const reasons: string[] = [];
 		const c2Applied = fx.git("rev-parse", "HEAD~1");
-		await session.draftSetFile(c2Applied, "b.txt", Buffer.from("later\n"));
+		await draftFile(session, c2Applied, "b.txt", Buffer.from("later\n"));
 		reasons.push(await unavailableReason());
 		await session.draftDiscard(c2Applied);
 
@@ -238,7 +239,7 @@ describe("undo", () => {
 	});
 
 	test("refuses as stale when the move changed after the user confirmed it", async () => {
-		await session.draftSetFile(c1, "a.txt", Buffer.from(edited));
+		await draftFile(session, c1, "a.txt", Buffer.from(edited));
 		const appliedTip = await applied();
 		expect(await session.undo(c3, appliedTip, "edits")).toEqual({ kind: "stale" });
 		expect(await session.undo(c2, appliedTip, "exact")).toEqual({ kind: "stale" });

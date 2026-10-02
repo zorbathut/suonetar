@@ -10,8 +10,8 @@ import { ask, button, el } from "./dom.ts";
 import { type HookSkip, type HookStop, hookSummary, hookViewCreate, progressText } from "./hook-view.ts";
 import type { CommitIdentity } from "./reselect.ts";
 import { type Report, ResolveView, type ResolveViewHost } from "./resolve-view.ts";
-import { branchShort, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary, type Worktree } from "./stack-view.ts";
-import { type ViewDecision, type ViewShown, viewDecide, worktreePollAction } from "./view-decide.ts";
+import { branchShort, commitStatusFor, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary, type Worktree } from "./stack-view.ts";
+import { commitShow, type ViewDecision, type ViewShown, viewDecide, worktreePollAction } from "./view-decide.ts";
 
 function byId(id: string): HTMLElement {
 	const node = document.getElementById(id);
@@ -167,9 +167,10 @@ function viewShown(): ViewShown {
 			return { kind: "draft", against: view.against };
 		case "worktree":
 			return { kind: "worktree", side: view.side };
+		case "resolve":
+			return { kind: "resolve", oid: view.view.oid };
 		case "none":
 		case "blocked":
-		case "resolve":
 		case "hook":
 			return { kind: view.kind };
 		default: {
@@ -221,9 +222,16 @@ function topRedraw(): void {
 	}
 	const stack = ready.stack;
 	whereEl.textContent = `${branchShort(stack.branch)} · ${stack.commits.length} commit${stack.commits.length === 1 ? "" : "s"}`;
-	const edited = ready.drafts.filter((d) => d.kind === "current").length;
-	const attention = ready.drafts.length - edited;
-	draftsEl.textContent = [edited > 0 ? `${edited} edited` : "", attention > 0 ? `${attention} need a decision` : ""].filter((s) => s !== "").join(" · ");
+	const edited = ready.commits.filter((c) => c.kind === "edited").length;
+	const conflicts = ready.commits.filter((c) => c.kind === "conflict").length;
+	const attention = ready.drafts.filter((d) => d.kind !== "current").length;
+	draftsEl.textContent = [
+		edited > 0 ? `${edited} edited` : "",
+		conflicts > 0 ? `${conflicts} conflict${conflicts === 1 ? "" : "s"}` : "",
+		attention > 0 ? `${attention} need a decision` : "",
+	]
+		.filter((s) => s !== "")
+		.join(" · ");
 }
 
 function undoButtonUpdate(): void {
@@ -253,12 +261,12 @@ function busySet(value: boolean): void {
 }
 
 function bannersUpdate(): void {
-	if (view.kind !== "commit" || ready === undefined) {
+	if ((view.kind !== "commit" && view.kind !== "resolve") || ready === undefined) {
 		return;
 	}
 	const oid = view.view.oid;
 	const banners: HTMLElement[] = [];
-	const pending = draftPendingFor(ready, oid);
+	const pending = view.kind === "commit" ? draftPendingFor(ready, oid) : undefined;
 	if (pending !== undefined) {
 		const actions = el(
 			"span",
@@ -278,10 +286,23 @@ function bannersUpdate(): void {
 				: "An edit made before this commit was rewritten is waiting for a decision; this commit is read-only until then.";
 		banners.push(el("div", { class: "banner banner-warn" }, text, actions));
 	}
-	const index = ready.stack.commits.findIndex((c) => c.oid === oid);
-	const below = new Set(ready.stack.commits.slice(0, Math.max(0, index)).map((c) => c.oid));
-	if (ready.drafts.some((d) => d.kind === "current" && below.has(d.commit.oid))) {
-		banners.push(el("div", { class: "banner" }, "Commits below this one have unapplied edits. This diff is against the current parent and does not include them yet."));
+	const conflictBelow = commitStatusFor(ready, oid)?.conflictBelow;
+	const conflicted = conflictBelow === undefined ? undefined : ready.stack.commits.find((c) => c.oid === conflictBelow);
+	if (conflicted !== undefined) {
+		banners.push(
+			el(
+				"div",
+				{ class: "banner banner-warn" },
+				view.kind === "resolve"
+					? `The conflict in “${conflicted.subject}” below is not resolved yet, so “below” here lacks the edits beneath it in the files that conflict touches; resolving that one first may change this one.`
+					: `The conflict in “${conflicted.subject}” below is not resolved yet, so the files it touches are shown here without the edits below it.`,
+				el(
+					"span",
+					{ class: "banner-actions" },
+					button("Go to the conflict", () => void op("Selecting", () => commitSelect(conflicted.oid))),
+				),
+			),
+		);
 	}
 	view.view.bannersSet(banners);
 }
@@ -322,6 +343,10 @@ async function show(decision: Exclude<ViewDecision, { kind: "keep" }>, reveal: s
 			"New commits show up here as they are made. To edit commits that are already pushed, give an older base after the repository on the command line, or set `git config suonetar.base <ref>`.",
 		]);
 		stackRedraw();
+		return;
+	}
+	if (decision.kind === "resolve") {
+		await resolveShow(await call(api.commitConflict(decision.oid)));
 		return;
 	}
 	const index = ready.stack.commits.findIndex((c) => c.oid === decision.oid);
@@ -430,6 +455,14 @@ async function refresh(): Promise<void> {
 		}, undefined);
 		return;
 	}
+	// The same conflict, but its merge changed (an edit below, made elsewhere): shown afresh, asking first if there is unsaved work.
+	if (view.kind === "resolve") {
+		const report = await call(api.commitConflict(view.view.oid));
+		if (!view.view.sameMerge(report)) {
+			await resolveShow(report);
+			return;
+		}
+	}
 	// Same view: only the surroundings changed (often just our own save), so the editors are left alone.
 	if (view.kind === "commit") {
 		const oid = view.view.oid;
@@ -444,7 +477,7 @@ async function refresh(): Promise<void> {
 }
 
 async function commitSelect(oid: string): Promise<void> {
-	await leaveAndShow((summary) => (summary.commits.some((c) => c.oid === oid) ? { kind: "commit", oid, readOnly: summary.pending.has(oid) } : followed(summary)), undefined);
+	await leaveAndShow((summary) => (summary.commits.some((c) => c.oid === oid) ? commitShow(summary, oid) : followed(summary)), undefined);
 }
 
 async function commitReload(path: string): Promise<void> {
@@ -452,7 +485,7 @@ async function commitReload(path: string): Promise<void> {
 		return;
 	}
 	const oid = view.view.oid;
-	await leaveAndShow((summary) => (summary.commits.some((c) => c.oid === oid) ? { kind: "commit", oid, readOnly: summary.pending.has(oid) } : followed(summary)), path);
+	await leaveAndShow((summary) => (summary.commits.some((c) => c.oid === oid) ? commitShow(summary, oid) : followed(summary)), path);
 }
 
 async function draftShow(status: DraftStatus): Promise<void> {
@@ -504,6 +537,7 @@ function draftDiscard(status: DraftStatus): void {
 	});
 }
 
+// Shows a commit's conflict, selecting the commit; the same merge already shown is updated in place, keeping unsaved work in its other records.
 async function resolveShow(conflict: Report): Promise<void> {
 	if (view.kind === "resolve" && view.view.sameMerge(conflict)) {
 		view.view.update(conflict);
@@ -512,37 +546,34 @@ async function resolveShow(conflict: Report): Promise<void> {
 	if (!(await viewLeave())) {
 		return;
 	}
+	const index = ready?.stack.commits.findIndex((c) => c.oid === conflict.commit.oid) ?? -1;
+	const commit = ready?.stack.commits[index];
+	if (commit !== undefined) {
+		selected = { oid: commit.oid, authorLine: commit.authorLine, subject: commit.subject, index };
+	}
 	const rv = await ResolveView.create(resolveHost, conflict);
 	filesEl.hidden = true;
 	docEl.replaceChildren(rv.root);
 	docEl.scrollTop = 0;
 	view = { kind: "resolve", view: rv };
-	statusSet("A commit needs attention before the edits can be applied.", "error");
+	stackRedraw();
+	bannersUpdate();
 }
 
+// After a resolution was saved: the commit's conflict again if parts of it remain, else the commit itself.
 async function resolveDone(): Promise<void> {
-	const preview = await call(api.preview());
-	switch (preview.kind) {
-		case "conflict":
-			await resolveShow(preview);
-			return;
-		case "clean": {
-			const rewrites = preview.steps.filter((s) => s.rewrite).length;
-			statusSet(`Resolved. Apply will rewrite ${rewrites} commit${rewrites === 1 ? "" : "s"}.`, "ok");
-			break;
-		}
-		case "drafts-need-attention":
-			statusSet("Some edits need a decision first (listed under the stack).", "error");
-			break;
-		case "nothing":
-			statusSet("Nothing to apply.", "info");
-			break;
-		default: {
-			const never: never = preview;
-			throw new Error(`unknown preview ${String(never)}`);
-		}
+	if (view.kind !== "resolve") {
+		return;
 	}
-	await leaveAndShow(followed, undefined);
+	const oid = view.view.oid;
+	const state = await stateRead();
+	if (state.kind === "ready" && commitStatusFor(state, oid)?.kind === "conflict") {
+		await resolveShow(await call(api.commitConflict(oid)));
+		return;
+	}
+	const conflicts = state.kind === "ready" ? state.commits.filter((c) => c.kind === "conflict").length : 0;
+	statusSet(conflicts === 0 ? "Resolved." : `Resolved; ${conflicts} more conflict${conflicts === 1 ? "" : "s"} in the stack.`, "ok");
+	await leaveAndShow((summary) => (summary.commits.some((c) => c.oid === oid) ? commitShow(summary, oid) : followed(summary)), undefined);
 }
 
 const resolveHost: ResolveViewHost = {
@@ -708,6 +739,7 @@ async function applyRun(hooks: HookChoice): Promise<void> {
 	const preview = await call(api.preview());
 	switch (preview.kind) {
 		case "conflict":
+			statusSet("Resolve the conflicts in the stack first.", "error");
 			await resolveShow(preview);
 			return;
 		case "nothing":

@@ -77,3 +77,11 @@ export class ErrorStale extends Error {
 		this.name = "ErrorStale";
 	}
 }
+
+// A save made from a view of a commit that has since changed elsewhere (another window, or a rewrite of the branch), which cannot be laid onto it safely.
+export class ErrorEditStale extends Error {
+	constructor(path: string) {
+		super(`${path} changed since it was shown, in another window or by a rewrite of the branch; reload to see it as it is now`);
+		this.name = "ErrorEditStale";
+	}
+}

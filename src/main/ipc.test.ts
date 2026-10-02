@@ -15,6 +15,7 @@ const NAMES: Record<keyof SuonetarApi, true> = {
 	state: true,
 	generation: true,
 	commitDocument: true,
+	commitConflict: true,
 	draftDocument: true,
 	blob: true,
 	blobAt: true,
@@ -101,21 +102,24 @@ describe("ipcRegister", () => {
 		expect(calls).toEqual([]);
 	});
 
-	it("turns bytes into Buffers and null into a deletion", async () => {
+	it("turns bytes into Buffers and null into a deletion or an absent file", async () => {
 		const { invoke, calls } = harness();
-		expect((await invoke("draftSetFile", OID, "a.txt", new Uint8Array([104, 105]))).ok).toBe(true);
-		expect((await invoke("draftSetFile", OID, "a.txt", null)).ok).toBe(true);
+		expect((await invoke("draftSetFile", OID, OID, "a.txt", OID, new Uint8Array([104, 105]))).ok).toBe(true);
+		expect((await invoke("draftSetFile", OID, OID, "a.txt", null, null)).ok).toBe(true);
 		const [first, second] = calls;
-		expect(Buffer.isBuffer(first?.[1][2])).toBe(true);
-		expect(String(first?.[1][2])).toBe("hi");
-		expect(second?.[1][2]).toBeNull();
+		expect(Buffer.isBuffer(first?.[1][4])).toBe(true);
+		expect(String(first?.[1][4])).toBe("hi");
+		expect(second?.[1][3]).toBeNull();
+		expect(second?.[1][4]).toBeNull();
 	});
 
 	it.each([
 		["a non-oid", "commitDocument", ["HEAD"]],
 		["a revision passed as a blob id", "blob", [`${OID}:path`]],
-		["a string for content", "draftSetFile", [OID, "a.txt", "text"]],
-		["an unknown restore source", "draftRestore", [OID, "a.txt", "somewhere"]],
+		["a string for content", "draftSetFile", [OID, OID, "a.txt", OID, "text"]],
+		["a non-oid parent tree", "draftSetFile", [OID, "HEAD", "a.txt", OID, new Uint8Array([104])]],
+		["a non-oid shown blob", "draftSetFile", [OID, OID, "a.txt", "HEAD:a.txt", new Uint8Array([104])]],
+		["an unknown restore source", "draftRestore", [OID, OID, "a.txt", "somewhere"]],
 		["a malformed choice", "resolve", [{ base: OID, ours: OID, theirs: OID }, "key", [{ path: "p", sideways: true }]]],
 		["incomplete merge inputs", "resolve", [{ base: OID }, "key", []]],
 		["an unknown hook choice", "apply", [{ kind: "sometimes" }]],

@@ -1,19 +1,20 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { derivedSteps, deriveTreesPlain, type Edit, stackDerive } from "./derive.ts";
 import type { Oid } from "./git.ts";
 import { CatFile, commitRead } from "./objects.ts";
-import { type Edit, replayCommit, replayTrees } from "./replay.ts";
+import { replayCommit } from "./replay.ts";
 import { type Stack, stackRead } from "./stack.ts";
 import { type Fixture, lineSet, lines, repoFixture } from "./test-support/repo.ts";
 import { blobWrite, type TreeChange, treeWithChanges } from "./write.ts";
 
 // An edit made on the commit's original parent.
 function edit(tree: Oid | undefined, message: Buffer | undefined = undefined): Edit {
-	return { tree, parentTree: undefined, message };
+	return { tree, parentTree: undefined, message, fallback: undefined };
 }
 
-describe("replay", () => {
+describe("stack derivation", () => {
 	let fx: Fixture;
 	let cat: CatFile;
 
@@ -37,9 +38,18 @@ describe("replay", () => {
 		return treeWithChanges(fx.repo, info.tree, [{ path, mode: "100644", oid: await blobWrite(fx.repo, Buffer.from(content)) }]);
 	}
 
+	// The derived stack as Apply sees it: its steps, or the lowest conflict.
 	async function replay(stack: Stack, edits: Map<Oid, Edit>, resolutions = new Map<string, readonly TreeChange[]>()) {
 		const baseTree = (await commitRead(cat, stack.baseOid)).tree;
-		return replayTrees(fx.repo, stack.commits, baseTree, edits, resolutions);
+		const derived = await stackDerive(deriveTreesPlain(fx.repo), stack.commits, baseTree, edits, resolutions);
+		const conflicted = derived.find((d) => d.conflict !== undefined);
+		if (conflicted?.conflict !== undefined) {
+			return { kind: "conflict" as const, commit: conflicted.commit, ...conflicted.conflict };
+		}
+		return {
+			kind: "clean" as const,
+			steps: derivedSteps(baseTree, derived),
+		};
 	}
 
 	async function show(tree: Oid, path: string): Promise<string> {
@@ -155,6 +165,59 @@ describe("replay", () => {
 		expect(byPath["bin.dat"]?.kind).toBe("structural");
 	});
 
+	describe("past a conflict", () => {
+		async function derive(stack: Stack, edits: Map<Oid, Edit>) {
+			const baseTree = (await commitRead(cat, stack.baseOid)).tree;
+			return stackDerive(deriveTreesPlain(fx.repo), stack.commits, baseTree, edits, new Map());
+		}
+
+		test("commits above build on the conflicted commit's own side, and their own conflicts are found too", async () => {
+			const c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 5, "c1"), "b.txt": lineSet(lines("b"), 5, "c1") });
+			fx.commit("c2", { "a.txt": lineSet(lines("a"), 5, "c2") });
+			fx.commit("c3", { "a.txt": lineSet(lineSet(lines("a"), 5, "c2"), 9, "c3") });
+			fx.commit("c4", { "b.txt": lineSet(lines("b"), 5, "c4") });
+			const stack = await stackRead(fx.repo, cat, undefined);
+			let tree = await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited"));
+			tree = await treeWithChanges(fx.repo, tree, [{ path: "b.txt", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from(lineSet(lines("b"), 5, "edited"))) }]);
+			const derived = await derive(stack, new Map([[c1, edit(tree)]]));
+			expect(derived.map((d) => d.conflict !== undefined)).toEqual([false, true, false, true]);
+			expect(derived.map((d) => d.provisional)).toEqual([[], [], ["a.txt"], ["a.txt"]]);
+			expect(await show(derived[1]?.tree as Oid, "a.txt")).toBe(lineSet(lines("a"), 5, "c2").trimEnd());
+			expect(await show(derived[2]?.tree as Oid, "a.txt")).toBe(lineSet(lineSet(lines("a"), 5, "c2"), 9, "c3").trimEnd());
+			// What does not conflict still carries the edit below.
+			expect(await show(derived[2]?.tree as Oid, "b.txt")).toBe(lineSet(lines("b"), 5, "edited").trimEnd());
+		});
+
+		test("a modify/delete and a file/directory conflict stand in as the commit's own side", async () => {
+			const c1 = fx.commit("c1", { "b.txt": lineSet(lines("b"), 1, "c1"), "d.txt": "file\n" });
+			fx.commit("c2", { "b.txt": null, "d.txt": null, "d.txt/inner.txt": "inner\n" });
+			fx.commit("c3", { "e.txt": "above\n" });
+			const stack = await stackRead(fx.repo, cat, undefined);
+			let tree = await fileEdit(c1, "b.txt", lineSet(lines("b"), 1, "edited"));
+			tree = await treeWithChanges(fx.repo, tree, [{ path: "d.txt", mode: "100644", oid: await blobWrite(fx.repo, Buffer.from("edited file\n")) }]);
+			const derived = await derive(stack, new Map([[c1, edit(tree)]]));
+			expect(derived[1]?.conflict?.conflicts.every((c) => c.kind === "structural")).toBe(true);
+			const above = derived[2]?.tree as Oid;
+			expect(fx.gitTry("cat-file", "-e", `${above}:b.txt`).code).not.toBe(0);
+			expect(await show(above, "d.txt/inner.txt")).toBe("inner");
+			expect(fx.git("ls-tree", "--name-only", above)).toBe(["a.txt", "d.txt", "e.txt"].join("\n"));
+		});
+
+		test("an edit's fallback is used once its own version no longer merges", async () => {
+			const c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 5, "c1") });
+			const c2 = fx.commit("c2", { "a.txt": lineSet(lines("a"), 5, "c2") });
+			const stack = await stackRead(fx.repo, cat, undefined);
+			const resolvedOn = await fileEdit(c1, "a.txt", lineSet(lines("a"), 5, "edited"));
+			const resolved = await fileEdit(c2, "a.txt", lineSet(lines("a"), 5, "both"));
+			const c1Tree = (await commitRead(cat, c1)).tree;
+			const c2Tree = (await commitRead(cat, c2)).tree;
+			const resolution: Edit = { tree: resolved, parentTree: resolvedOn, message: undefined, fallback: { parentTree: c1Tree, tree: c2Tree } };
+			const derived = await derive(stack, new Map([[c2, resolution]]));
+			expect(derived[1]?.fallback).toBe(true);
+			expect(derived[1]?.tree).toBe(c2Tree);
+		});
+	});
+
 	test("an edit made on top of an edited parent takes only the parent's later changes", async () => {
 		const c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
 		const c2 = fx.commit("c2", { "b.txt": lineSet(lines("b"), 2, "c2") });
@@ -167,7 +230,7 @@ describe("replay", () => {
 			stack,
 			new Map([
 				[c1, edit(second)],
-				[c2, { tree: onFirst, parentTree: first, message: undefined }],
+				[c2, { tree: onFirst, parentTree: first, message: undefined, fallback: undefined }],
 			]),
 		);
 		if (result.kind !== "clean") {

@@ -255,8 +255,11 @@ export async function worktreeFiles(
 			parent: tooLarge ? undefined : parent.data,
 			commit: tooLarge ? undefined : shownVersion.data,
 			draft: tooLarge ? undefined : shownVersion.data,
+			draftOid: undefined,
 			tooLarge,
 			indentation: fileIndentation,
+			mineUnknown: false,
+			provisional: false,
 		});
 	}
 	return {

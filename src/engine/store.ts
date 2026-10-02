@@ -15,6 +15,8 @@ export type DraftMeta = {
 	// Base64 of the original and edited message bytes; both absent when only files are edited.
 	readonly baseMessage: string | undefined;
 	readonly message: string | undefined;
+	// "resolution" for an entry that records how a conflict was resolved rather than an edit the user made; absent in drafts written before resolutions were stored this way.
+	readonly origin: "resolution" | undefined;
 };
 
 export type DraftEntry = {
@@ -26,6 +28,8 @@ export type DraftEntry = {
 	// The `against` commit's tree and its parent's, kept so the draft can be rebased and shown even after that commit is gone; `baseParent` is undefined where `parentTree` is.
 	readonly base: Oid;
 	readonly baseParent: Oid | undefined;
+	// For a resolution: the version of the commit it replaced, used if the resolution stops merging (the edit that caused the conflict was undone).
+	readonly fallback: { readonly parentTree: Oid; readonly tree: Oid } | undefined;
 	// The entry's own tree in the store, compared to detect concurrent changes; undefined until written.
 	readonly entryOid: Oid | undefined;
 };
@@ -94,7 +98,20 @@ export async function storeRead(repo: Repo, cat: CatFile): Promise<Store> {
 		}
 		const parsed = (await readJson(cat, meta.oid)) as DraftMeta;
 		const named = (name: string) => entries.find((e) => e.name === name)?.oid;
-		drafts.set(parsed.against, { meta: parsed, tree: named("tree"), parentTree: named("parent"), base: base.oid, baseParent: named("baseParent"), entryOid: dir.oid });
+		const fallbackParent = named("fallbackParent");
+		const fallbackTree = named("fallbackTree");
+		if ((fallbackParent === undefined) !== (fallbackTree === undefined) || (parsed.origin !== undefined && parsed.origin !== "resolution")) {
+			throw new Error(`malformed draft entry ${dir.name} in ${STORE_REF}`);
+		}
+		drafts.set(parsed.against, {
+			meta: { ...parsed, origin: parsed.origin },
+			tree: named("tree"),
+			parentTree: named("parent"),
+			base: base.oid,
+			baseParent: named("baseParent"),
+			fallback: fallbackParent === undefined || fallbackTree === undefined ? undefined : { parentTree: fallbackParent, tree: fallbackTree },
+			entryOid: dir.oid,
+		});
 	}
 	const resolutions = new Map<string, ResolutionEntry>();
 	const resolutionsDir = root.find((e) => e.name === "resolutions");
@@ -123,6 +140,8 @@ export async function storeWrite(repo: Repo, previous: Store, drafts: ReadonlyMa
 			["tree", draft.tree],
 			["parent", draft.parentTree],
 			["baseParent", draft.baseParent],
+			["fallbackParent", draft.fallback?.parentTree],
+			["fallbackTree", draft.fallback?.tree],
 		];
 		for (const [name, oid] of trees) {
 			if (oid !== undefined) {

@@ -165,7 +165,7 @@ export async function undoAssess(
 	return { info: { kind: "edits", ...move }, pairing };
 }
 
-// Drafts that restore each replaced commit's own change on top of its replacement's parent as the move made it: Yᵢ's change laid onto Xᵢ₋₁. A commit that was only restacked gets the very merge its replay made, so no draft; where that merge conflicts, the draft is Yᵢ's whole tree and the later Apply asks for a resolution.
+// Drafts that restore each replaced commit's own change on top of its replacement's parent as the move made it: Yᵢ's change laid onto Xᵢ₋₁. A commit that was only restacked gets the very merge its replay made, so no draft; where that merge conflicts, the draft is Yᵢ's whole tree, and restacking it shows the conflict for resolving.
 export async function undoDrafts(repo: Repo, cat: CatFile, branch: string, pairing: UndoPairing): Promise<DraftEntry[]> {
 	const baseTree = (await commitRead(cat, pairing.base)).tree;
 	const drafts: DraftEntry[] = [];

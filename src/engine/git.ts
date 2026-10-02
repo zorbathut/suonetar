@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { delimiter, join, posix } from "node:path";
 import { ErrorGit, ErrorNotRepository } from "./errors.ts";
@@ -330,6 +331,15 @@ export async function repoOpen(run: GitRunner, runHook: HookRunner, readOutside:
 		throw new Error(`unexpected rev-parse output: ${probe.stdout.toString("utf8")}`);
 	}
 	return { run, runHook, readOutside, worktree, gitDir, commonDir, envExtra };
+}
+
+// The same repository, writing new objects to the directory `objects` (created here) instead, and reading its own through it as an alternate: merges made only to be looked at then leave nothing behind in the repository. Anything stored for later (a ref, a draft) must not point at objects written this way.
+export function repoWithObjects(repo: Repo, objects: string): Repo {
+	mkdirSync(join(objects, "info"), { recursive: true });
+	// A file rather than GIT_ALTERNATE_OBJECT_DIRECTORIES, which would split a path containing the path separator.
+	writeFileSync(join(objects, "info", "alternates"), `${join(repo.commonDir, "objects")}\n`);
+	const env = { GIT_OBJECT_DIRECTORY: objects };
+	return { ...repo, run: (args, opts) => repo.run(args, { ...opts, env: { ...env, ...opts.env } }), envExtra: { ...repo.envExtra, ...env } };
 }
 
 // Characters of arguments per command: Windows caps a whole command line at 32K, and the `git` launcher passes it on re-quoted.

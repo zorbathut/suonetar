@@ -1,5 +1,5 @@
 import type { IpcMain, WebContents } from "electron";
-import type { MergeInputs } from "../engine/replay.ts";
+import type { MergeInputs } from "../engine/derive.ts";
 import type { HookChoice, ResolutionChoice, Session } from "../engine/session.ts";
 import { APPLY_PROGRESS_CHANNEL, type ApiValue, apiChannel, type SuonetarApi } from "../shared/api.ts";
 import { resultOf } from "./result.ts";
@@ -35,6 +35,10 @@ function bytes(value: unknown, what: string): Buffer {
 		throw new ErrorIpcArgument(`${what} is not bytes`);
 	}
 	return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+}
+
+function argOidOrNull(args: readonly unknown[], i: number): string | null {
+	return args[i] === null ? null : argOid(args, i);
 }
 
 function argBytesOrNull(args: readonly unknown[], i: number): Buffer | null {
@@ -96,6 +100,7 @@ export type SessionApi = Pick<
 	| "state"
 	| "generation"
 	| "commitDocument"
+	| "commitConflict"
 	| "draftDocument"
 	| "blob"
 	| "blobAt"
@@ -137,19 +142,17 @@ export function ipcRegister(
 	handle("state", () => current().state());
 	handle("generation", () => current().generation());
 	handle("commitDocument", (a) => current().commitDocument(argOid(a, 0)));
+	handle("commitConflict", (a) => current().commitConflict(argOid(a, 0)));
 	handle("draftDocument", (a) => current().draftDocument(argOid(a, 0)));
 	handle("blob", (a) => current().blob(argOid(a, 0)));
 	handle("blobAt", (a) => current().blobAt(argOid(a, 0), argString(a, 1)));
-	handle("draftSetFile", async (a) => {
-		await current().draftSetFile(argOid(a, 0), argString(a, 1), argBytesOrNull(a, 2));
-		return undefined;
-	});
+	handle("draftSetFile", (a) => current().draftSetFile(argOid(a, 0), argOid(a, 1), argString(a, 2), argOidOrNull(a, 3), argBytesOrNull(a, 4)));
 	handle("draftRestore", async (a) => {
-		const from = a[2];
+		const from = a[3];
 		if (from !== "commit" && from !== "parent") {
-			throw new ErrorIpcArgument("argument 2 is not commit or parent");
+			throw new ErrorIpcArgument("argument 3 is not commit or parent");
 		}
-		await current().draftRestore(argOid(a, 0), argString(a, 1), from);
+		await current().draftRestore(argOid(a, 0), argOid(a, 1), argString(a, 2), from);
 		return undefined;
 	});
 	handle("draftSetMessage", async (a) => {

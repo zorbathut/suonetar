@@ -142,6 +142,7 @@ export class ResolveView {
 	#report: Report;
 	readonly #labels: ReadonlyMap<string, string>;
 	readonly #rows: Row[] = [];
+	readonly #banners: HTMLElement;
 	// The configured merge tool, offered for content conflicts.
 	readonly #tool: string | undefined;
 
@@ -149,19 +150,22 @@ export class ResolveView {
 		this.#host = host;
 		this.#report = report;
 		this.#tool = tool;
+		const own = report.edited ? "this commit as you edited it" : "this commit";
 		this.#labels = new Map([
 			[report.inputs.ours, "below"],
-			[report.inputs.theirs, "this commit"],
+			[report.inputs.theirs, own],
 			[report.inputs.base, "base"],
 		]);
 		const commit = report.commit;
+		this.#banners = el("div", { class: "banners" });
 		this.root = el(
 			"div",
 			{ class: "resolve-view" },
-			el("h1", { class: "commit-title" }, "Needs attention: ", el("span", { class: "oid", text: commit.oid.slice(0, 10) }), " ", commit.subject),
+			this.#banners,
+			el("h1", { class: "commit-title" }, "Conflict: ", el("span", { class: "oid", text: commit.oid.slice(0, 10) }), " ", commit.subject),
 			el("p", {
 				class: "explain",
-				text: "Replaying this commit onto the edits below it conflicts. “below” is the rewritten commits underneath, including your edits; “this commit” is this commit's own change; “base” is its original parent.",
+				text: `Restacking this commit onto the edits below it conflicts. “below” is the commits underneath as they are now, including your edits; “${own}” is this commit's own change${report.edited ? ", with your edits to it or an earlier resolution" : ""}; “base” is the parent it was made on.`,
 			}),
 		);
 	}
@@ -170,6 +174,14 @@ export class ResolveView {
 		const view = new ResolveView(host, report, await call(api.mergetoolName()));
 		await view.#render();
 		return view;
+	}
+
+	get oid(): string {
+		return this.#report.commit.oid;
+	}
+
+	bannersSet(nodes: readonly Node[]): void {
+		this.#banners.replaceChildren(...nodes);
 	}
 
 	// Whether this view shows the same merge as `report`, so it can be updated in place.
@@ -301,16 +313,12 @@ export class ResolveView {
 			const indentation = await call(api.indentation(this.#report.markerTree, path));
 			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField], indentation });
 			update();
+			const actions = el("span", { class: "actions" });
 			const tool = this.#tool;
 			if (tool !== undefined) {
-				header.append(
-					el(
-						"span",
-						{ class: "actions" },
-						button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)),
-					),
-				);
+				actions.append(button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)));
 			}
+			header.append(actions);
 			editors.push({ path, view, codec: decoded.codec, initial });
 		}
 		root.append(

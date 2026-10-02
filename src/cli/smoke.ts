@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { gitText } from "../engine/git.ts";
 import { Session } from "../engine/session.ts";
 
 const [repoPath, command, ...rest] = process.argv.slice(2);
@@ -44,10 +45,11 @@ try {
 	} else if (command === "edit") {
 		const commit = commitAt(rest[0]);
 		const path = rest[1] ?? "";
-		const versions = (await session.commitDocument(commit.oid)).files.find((f) => f.path === path) ?? { draft: undefined };
+		const doc = await session.commitDocument(commit.oid);
+		const shown = await session.blobAt(doc.tree, path);
 		const dir = mkdtempSync(join(tmpdir(), "suonetar-smoke-"));
 		const file = join(dir, basename(path));
-		writeFileSync(file, versions.draft ?? "");
+		writeFileSync(file, shown ?? "");
 		// $EDITOR may carry arguments (`code --wait`), so it goes through the shell, with the file passed as a positional parameter. Windows has no sh to rely on; there cmd gets the path in quotes, good enough for a development tool (cmd still expands `%VAR%` inside them).
 		const editorCommand = process.env.VISUAL ?? process.env.EDITOR;
 		const editor =
@@ -57,7 +59,8 @@ try {
 		if (editor.status !== 0) {
 			throw new Error(`editor exited ${editor.status}`);
 		}
-		await session.draftSetFile(commit.oid, path, readFileSync(file));
+		const shownOid = shown === undefined ? null : await gitText(session.repo, ["hash-object", "--stdin"], { input: shown });
+		await session.draftSetFile(commit.oid, doc.parentTree, path, shownOid, readFileSync(file));
 		rmSync(dir, { recursive: true });
 		console.log("draft saved");
 	} else if (command === "preview" || command === "apply") {

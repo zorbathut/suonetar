@@ -1,10 +1,6 @@
 import type { Oid, Repo } from "./git.ts";
-import { type Conflict, mergeTrees } from "./merge.ts";
 import type { StackCommit } from "./stack.ts";
-import { commitWrite, type TreeChange, treeWithChanges } from "./write.ts";
-
-// The desired new version of one stack commit: `tree` on top of a parent whose tree is `parentTree` (undefined: the commit's original parent), or the commit's own tree when `tree` is undefined.
-export type Edit = { readonly tree: Oid | undefined; readonly parentTree: Oid | undefined; readonly message: Buffer | undefined };
+import { commitWrite } from "./write.ts";
 
 export type ReplayStep = {
 	readonly commit: StackCommit;
@@ -14,61 +10,6 @@ export type ReplayStep = {
 	readonly rewrite: boolean;
 	readonly empty: boolean;
 };
-
-export type MergeInputs = { readonly base: Oid; readonly ours: Oid; readonly theirs: Oid };
-
-export type ReplayResult =
-	| { readonly kind: "clean"; readonly steps: readonly ReplayStep[] }
-	| {
-			readonly kind: "conflict";
-			readonly commit: StackCommit;
-			readonly inputs: MergeInputs;
-			readonly markerTree: Oid;
-			// Every conflict in the commit, each flagged with whether a stored resolution already covers it.
-			readonly conflicts: readonly (Conflict & { readonly resolved: boolean })[];
-	  };
-
-// Computes the restacked trees without writing any commit, ref, index, or file.
-export async function replayTrees(
-	repo: Repo,
-	commits: readonly StackCommit[],
-	baseTree: Oid,
-	edits: ReadonlyMap<Oid, Edit>,
-	resolutions: ReadonlyMap<string, readonly TreeChange[]>,
-): Promise<ReplayResult> {
-	const steps: ReplayStep[] = [];
-	let oldParentTree = baseTree;
-	let newParentTree = baseTree;
-	for (const commit of commits) {
-		const edit = edits.get(commit.oid);
-		const theirs = edit?.tree ?? commit.tree;
-		const base = edit?.tree === undefined ? oldParentTree : (edit.parentTree ?? oldParentTree);
-		let tree: Oid;
-		if (newParentTree === base) {
-			tree = theirs;
-		} else {
-			const inputs = { base, ours: newParentTree, theirs };
-			const merged = await mergeTrees(repo, inputs.base, inputs.ours, inputs.theirs);
-			if (merged.kind === "clean") {
-				tree = merged.tree;
-			} else {
-				const conflicts = merged.conflicts.map((conflict) => ({ ...conflict, resolved: resolutions.has(conflict.key) }));
-				if (!conflicts.every((c) => c.resolved)) {
-					return { kind: "conflict", commit, inputs, markerTree: merged.markerTree, conflicts };
-				}
-				tree = await treeWithChanges(
-					repo,
-					merged.markerTree,
-					merged.conflicts.flatMap((c) => resolutions.get(c.key) ?? []),
-				);
-			}
-		}
-		steps.push({ commit, tree, message: edit?.message ?? commit.message, rewrite: false, empty: false });
-		oldParentTree = commit.tree;
-		newParentTree = tree;
-	}
-	return { kind: "clean", steps: stepsReflag(baseTree, steps) };
-}
 
 // Sets `rewrite` and `empty` from the trees and messages: after the replay, and again after the pre-commit pass changed trees.
 export function stepsReflag(baseTree: Oid, steps: readonly ReplayStep[]): ReplayStep[] {

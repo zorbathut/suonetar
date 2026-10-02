@@ -2,8 +2,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { MergeInputs } from "./replay.ts";
+import type { MergeInputs } from "./derive.ts";
 import { Session } from "./session.ts";
+import { draftFile } from "./test-support/drafts.ts";
 import { dirRemove, type Fixture, lineSet, lines, repoFixture, shPath, shSleeper } from "./test-support/repo.ts";
 
 describe("mergetool", () => {
@@ -28,7 +29,7 @@ describe("mergetool", () => {
 		const k1 = fx.commit("k1", { "a.txt": baseText });
 		fx.commit("k2", { "a.txt": theirsText });
 		session = await Session.openRepo(fx.repo, undefined);
-		await session.draftSetFile(k1, "a.txt", Buffer.from(oursText));
+		await draftFile(session, k1, "a.txt", Buffer.from(oursText));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
 			throw new Error(`preview is ${preview.kind}`);
@@ -98,7 +99,7 @@ describe("mergetool", () => {
 		fx.commit("c2", { "f.crlf": "two\n" });
 		session.close();
 		session = await Session.openRepo(fx.repo, undefined);
-		await session.draftSetFile(c1, "f.crlf", Buffer.from("mine\n"));
+		await draftFile(session, c1, "f.crlf", Buffer.from("mine\n"));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
 			throw new Error(`preview is ${preview.kind}`);
@@ -141,7 +142,7 @@ describe("mergetool", () => {
 		fx.commit("c2", { "sub/n.txt": "c2\n" });
 		session.close();
 		session = await Session.openRepo(fx.repo, undefined);
-		await session.draftSetFile(c1, "sub/n.txt", Buffer.from("mine\n"));
+		await draftFile(session, c1, "sub/n.txt", Buffer.from("mine\n"));
 		const preview = await session.preview();
 		if (preview.kind !== "conflict") {
 			throw new Error(`preview is ${preview.kind}`);
