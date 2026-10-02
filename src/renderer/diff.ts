@@ -47,6 +47,9 @@ const CHARS_SIMILARITY_MIN = 0.5;
 // How alike two lines in a changed region must be, as the share of their non-blank character pairs they have in common, to be paired up and compared character by character.
 const LINES_SIMILARITY_MIN = 0.5;
 
+// Lines either side of a change joined across content-free lines may grow to: past this, a rewrite is shown as several chunks, so that Revert chunk keeps some granularity and typing in it re-diffs a bounded window.
+const ABSORBED_LINES_MAX = 200;
+
 // Characters that pairing lines by likeness may compare in one diff, every line of a region against every line, across all its regions. Past this, a region's lines pair from each end for as long as they stay alike.
 const PAIRING_WORK_MAX = 4_000_000;
 
@@ -79,7 +82,7 @@ function nonBlank(text: string): string {
 	return text.replace(/\s/g, "");
 }
 
-// A line with no letter or digit, such as a brace, a blank line or `});`: it says nothing about which code it belongs to, so it never anchors an alignment by itself.
+// A line with no letter or digit, such as a brace, a blank line or `});`: it says nothing about which code it belongs to, so it never anchors an alignment by itself, and rewritten lines on either side of it read as one block.
 function lineJunk(line: string): boolean {
 	return !/[\p{L}\p{N}]/u.test(line);
 }
@@ -539,6 +542,50 @@ function changesWithin(diffing: Diffing, r: Region, out: Change[]): void {
 	}
 }
 
+function linesCount(text: string): number {
+	let count = 0;
+	for (let i = text.indexOf("\n"); i >= 0; i = text.indexOf("\n", i + 1)) {
+		count++;
+	}
+	return text === "" || text.endsWith("\n") ? count : count + 1;
+}
+
+// Joins two changes that each replace, add or remove whole lines when only content-free lines lie between them, weighing (non-blank characters plus lines) no more than either change, and the joined change spans at most ABSORBED_LINES_MAX lines: braces kept between rewritten statements are where the rewrite happens to match, not code that stayed. Changes narrowed to characters within lines are never joined, so that a rename on lines either side of a brace stays two small edits.
+function changesAbsorbed(a: string, b: string, changes: readonly Change[]): Change[] {
+	const lineStart = (text: string, pos: number) => pos === 0 || text[pos - 1] === "\n";
+	const whole = (c: Change) => lineStart(a, c.fromA) && lineStart(b, c.fromB) && (lineStart(a, c.toA) || c.toA === a.length) && (lineStart(b, c.toB) || c.toB === b.length);
+	const weight = (text: string) => nonBlank(text).length + linesCount(text);
+	const absorbed: Change[] = [];
+	// The last change kept, if whole, with what it holds on each side so far.
+	let last: { change: Change; weightA: number; weightB: number; linesA: number; linesB: number } | undefined;
+	for (const c of changes) {
+		const textA = a.slice(c.fromA, c.toA);
+		const textB = b.slice(c.fromB, c.toB);
+		const own = { weightA: weight(textA), weightB: weight(textB), linesA: linesCount(textA), linesB: linesCount(textB) };
+		if (last !== undefined && c.fromA > last.change.toA && whole(c)) {
+			const kept = a.slice(last.change.toA, c.fromA);
+			const keptWeight = weight(kept);
+			const keptLines = linesCount(kept);
+			const fits = last.linesA + keptLines + own.linesA <= ABSORBED_LINES_MAX && last.linesB + keptLines + own.linesB <= ABSORBED_LINES_MAX;
+			if (fits && keptWeight <= Math.min(Math.max(last.weightA, last.weightB), Math.max(own.weightA, own.weightB)) && lineJunk(kept)) {
+				const change = new Change(last.change.fromA, c.toA, last.change.fromB, c.toB);
+				absorbed[absorbed.length - 1] = change;
+				last = {
+					change,
+					weightA: last.weightA + keptWeight + own.weightA,
+					weightB: last.weightB + keptWeight + own.weightB,
+					linesA: last.linesA + keptLines + own.linesA,
+					linesB: last.linesB + keptLines + own.linesB,
+				};
+				continue;
+			}
+		}
+		absorbed.push(c);
+		last = whole(c) ? { change: c, ...own } : undefined;
+	}
+	return absorbed;
+}
+
 // Starts each change that would start at an empty line on both sides at the line break before it instead, which makes the same edit. CodeMirror takes a change starting at an empty line on both sides to start on the next line, which would put its chunk a line out of step and have Revert chunk revert the wrong text; one starting at the end of a line, it reads right. A change straight after the one before it shares that one's chunk, and is left as it is.
 function changesAnchored(a: string, b: string, changes: readonly Change[]): Change[] {
 	const blankAt = (text: string, pos: number) => pos > 0 && pos < text.length && text[pos] === "\n" && text[pos - 1] === "\n";
@@ -560,7 +607,7 @@ function sideOf(text: string, intern: (line: string) => number): Side {
 	return { text, lines, offsets, ids: Int32Array.from(lines, intern) };
 }
 
-// The changes from `a` to `b`: lines lined up by git's histogram algorithm (except that lines without content never anchor it), then again ignoring whitespace within each changed region, then paired up and narrowed to the characters that differ. CodeMirror's own diff works on characters throughout, and on a large rewrite it gives up and marks everything from the first change to the last.
+// The changes from `a` to `b`: lines lined up by git's histogram algorithm (except that lines without content never anchor it), then again ignoring whitespace within each changed region, then paired up and narrowed to the characters that differ, with rewritten lines that only content-free lines separate joined into one change. CodeMirror's own diff works on characters throughout, and on a large rewrite it gives up and marks everything from the first change to the last.
 export function diffByLine(a: string, b: string): readonly Change[] {
 	if (a === b) {
 		return [];
@@ -600,5 +647,5 @@ export function diffByLine(a: string, b: string): readonly Change[] {
 	for (const r of regions) {
 		changesWithin(diffing, r, changes);
 	}
-	return changesAnchored(a, b, changes);
+	return changesAnchored(a, b, changesAbsorbed(a, b, changes));
 }

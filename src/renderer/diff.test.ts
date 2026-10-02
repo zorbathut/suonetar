@@ -306,6 +306,23 @@ describe("diffByLine", () => {
 		expect(changedLength(diffByLine(as, bs))).toEqual({ a: first.length + 1 + 5 * 6, b: last.length + 1 });
 	});
 
+	it("shows a rewritten body as one block, not split at the braces it keeps", () => {
+		const a = ["void F()", "{", "    alpha();", "    {", "        beta(1);", "    }", "    gamma = 2;", "}"];
+		const b = ["void F()", "{", "    delta.Run();", "    {", "        epsilon(true);", "    }", "    zeta += 9;", "}"];
+		const [ta, tb] = [Text.of(a), Text.of(b)];
+		const chunks = Chunk.build(ta, tb, CONFIG);
+		expect(chunks).toHaveLength(1);
+		const [c] = chunks;
+		expect(c && [ta.lineAt(c.fromA).number, ta.lineAt(c.endA).number, tb.lineAt(c.fromB).number, tb.lineAt(c.endB).number]).toEqual([3, 7, 3, 7]);
+	});
+
+	it("keeps two rewritten lines with only a brace between them in one chunk", () => {
+		// Indented, so that CodeMirror's own joining of changes a character or two apart does not join them.
+		const a = ["x();", "    alpha();", "    }", "    gamma = 2;", "y();"];
+		const b = ["x();", "    delta.Run();", "    }", "    zeta += 9;", "y();"];
+		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG)).toHaveLength(1);
+	});
+
 	it("still narrows a rename on each line of a body, across its braces", () => {
 		const a = ["void F()", "{", "    if (Godot.Input.IsKeyPressed(1))", "    {", "        Godot.GD.Print(1);", "    }", "    Godot.GD.Print(2);", "}"];
 		const b = a.map((line) => line.replaceAll("Godot.", ""));
@@ -313,6 +330,20 @@ describe("diffByLine", () => {
 		const changes = diffByLine(as, bs);
 		expect(changes.every((c) => !as.slice(c.fromA, c.toA).includes("\n") && !bs.slice(c.fromB, c.toB).includes("\n"))).toBe(true);
 		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG)).toHaveLength(3);
+	});
+
+	it("keeps edits within lines on either side of a brace apart", () => {
+		const a = ["x();", "    Print(oldName)", "    }", "    oldName.Run();", "y();"];
+		const b = a.map((line) => line.replace("oldName", "newWord"));
+		const [as, bs] = [a.join("\n"), b.join("\n")];
+		expect(diffByLine(as, bs).every((c) => !as.slice(c.fromA, c.toA).includes("\n"))).toBe(true);
+		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG)).toHaveLength(2);
+	});
+
+	it("keeps a rewritten line apart from a rename beyond a brace", () => {
+		const a = ["x();", "    alpha();", "    }", "    oldName.Run();", "y();"];
+		const b = ["x();", "    delta.Run();", "    }", "    newWord.Run();", "y();"];
+		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG)).toHaveLength(2);
 	});
 
 	it("keeps lines with content matched rather than a longer run of braces", () => {
@@ -399,6 +430,14 @@ describe("diffByLine", () => {
 		for (const line of [7, 9, 10]) {
 			expect(covered.has(line), `line ${line}: ${b[line - 1]}`).toBe(false);
 		}
+	});
+
+	it("does not join a whole list of rewritten records into one chunk, and stays quick doing it", { timeout: 2000 * TIMEOUT_SCALE }, () => {
+		const rnd = random(5);
+		const id = () => Array.from({ length: 4 }, () => Math.floor(rnd() * 0x10000000).toString(16)).join("-");
+		const records = (n: number) => ["[", ...Array.from({ length: n }, () => ["  {", `    "id": "${id()}"`, "  },"]).flat(), "]"];
+		const [a, b] = [records(5000), records(5000)];
+		expect(Chunk.build(Text.of(a), Text.of(b), CONFIG).length).toBeGreaterThan(1);
 	});
 
 	it("narrows a changed word to the word", () => {
