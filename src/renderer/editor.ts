@@ -38,7 +38,7 @@ function mergeControl(type: "reject" | "accept", action: (e: MouseEvent) => void
 	}
 	node.name = "reject";
 	node.textContent = "Revert chunk";
-	node.title = "Take this chunk out of the commit (it moves to the commit above)";
+	node.title = "Take this chunk out of the commit and every commit above it";
 	node.addEventListener("mousedown", action);
 	return node;
 }
