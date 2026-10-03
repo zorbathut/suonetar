@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { ErrorNoBase, ErrorNotOnBranch } from "./errors.ts";
 import { CatFile } from "./objects.ts";
@@ -288,6 +290,83 @@ describe("stackRead", () => {
 		expect(String(fromCaller)).toContain("origin/nope");
 		expect(String(fromConfig)).toContain("nope");
 		expect(String(fromCaller).replace("origin/nope", "nope")).not.toBe(String(fromConfig));
+	});
+
+	test("reads suonetar.base as git config --get does: an empty value, the last of several, spaces kept", async () => {
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("the base", { "b.txt": "b\n" });
+		const mark = fx.git("rev-parse", "HEAD");
+		fx.commit("one", { "a.txt": "1\n" });
+		appendFileSync(join(fx.dir, ".git", "config"), "[suonetar]\n\tbase\n");
+		const empty = await stackRead(fx.repo, cat, undefined).catch((err: unknown) => err);
+		expect(String(empty)).toBe(String(new ErrorNoBase("feature", { kind: "chosen", ref: "", by: "config" })));
+		fx.git("config", "--unset-all", "suonetar.base");
+		fx.git("config", "--add", "suonetar.base", "nope");
+		fx.git("config", "--add", "suonetar.base", "feature^{/the base}");
+		const stack = await stackRead(fx.repo, cat, undefined);
+		expect(stack.baseRef).toBe("feature^{/the base}");
+		expect(stack.baseOid).toBe(mark);
+	});
+
+	test("a candidate holding an annotated tag, or a tag of one, resolves to its commit", async () => {
+		const base = fx.git("rev-parse", "HEAD");
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		fx.git("tag", "-a", "-m", "tag", "inner", base);
+		fx.git("tag", "-a", "-m", "tag of a tag", "outer", "inner");
+		fx.git("branch", "-q", "-D", "main");
+		for (const tag of ["inner", "outer"]) {
+			fx.git("update-ref", "refs/remotes/origin/main", fx.git("rev-parse", `refs/tags/${tag}`));
+			const stack = await stackRead(fx.repo, cat, undefined);
+			expect(stack.baseRef).toBe("refs/remotes/origin/main");
+			expect(stack.baseOid).toBe(base);
+		}
+	});
+
+	test("reads the stack in a few processes, none spent on the bases that are not there", async () => {
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		fx.commit("two", { "a.txt": "2\n" });
+		const calls: string[][] = [];
+		const counted = {
+			...fx.repo,
+			run: (args: readonly string[], opts: Parameters<typeof fx.repo.run>[1]) => {
+				calls.push([...args]);
+				return fx.repo.run(args, opts);
+			},
+		};
+		const counts = async (): Promise<{ mergeBases: number; others: number }> => {
+			calls.length = 0;
+			await stackRead(counted, cat, undefined);
+			const mergeBases = calls.filter((a) => a[0] === "merge-base").length;
+			return { mergeBases, others: calls.length - mergeBases };
+		};
+		// Only main exists of the candidate bases.
+		const alone = await counts();
+		expect(alone.mergeBases).toBe(1);
+		// Main's commit on origin's main and master and upstream's main, origin's HEAD naming its main, and the branch's copy on origin a commit behind: candidates at two distinct commits.
+		const main = fx.git("rev-parse", "main");
+		for (const ref of ["refs/remotes/origin/main", "refs/remotes/upstream/main", "refs/remotes/origin/master"]) {
+			fx.git("update-ref", ref, main);
+		}
+		fx.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+		fx.git("update-ref", "refs/remotes/origin/feature", fx.git("rev-parse", "feature~1"));
+		const crowded = await counts();
+		expect(crowded.others).toBe(alone.others);
+		// One merge-base for each distinct commit among the candidates, and one comparison between them.
+		expect(crowded.mergeBases).toBe(3);
+		expect(alone.others).toBeLessThanOrEqual(5);
+	});
+
+	test("a branch naming an object that is not in the repository does not stop the read", async () => {
+		const base = fx.git("rev-parse", "HEAD");
+		mkdirSync(join(fx.dir, ".git", "refs", "heads", "zz"), { recursive: true });
+		writeFileSync(join(fx.dir, ".git", "refs", "heads", "zz", "old"), `${"2".repeat(40)}\n`);
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		const stack = await stackRead(fx.repo, cat, undefined);
+		expect(stack.baseRef).toBe("refs/heads/main");
+		expect(stack.baseOid).toBe(base);
 	});
 
 	test("refuses a detached HEAD", async () => {
