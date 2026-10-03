@@ -6,6 +6,7 @@ import type { MergeInputs } from "./derive.ts";
 import { Session } from "./session.ts";
 import { draftFile } from "./test-support/drafts.ts";
 import { dirRemove, type Fixture, lineSet, lines, repoFixture, shPath, shSleeper } from "./test-support/repo.ts";
+import { TIMEOUT_SCALE } from "./test-support/timeout.ts";
 
 describe("mergetool", () => {
 	let fx: Fixture;
@@ -113,9 +114,12 @@ describe("mergetool", () => {
 		const pidFile = join(tmp, "tool.pid");
 		toolSet(`${shSleeper(pidFile)} & touch "${shPath(join(fx.dir, "started"))}"; wait`, true);
 		const running = session.mergetool(inputs, key, "a.txt", Buffer.from("current\n"));
-		for (let i = 0; i < 100 && !(existsSync(join(fx.dir, "started")) && existsSync(pidFile) && readFileSync(pidFile, "utf8") !== ""); i++) {
+		// The tool starts only once the stack is derived, which on Windows can take seconds; cancelling before it runs would test nothing.
+		const started = (): boolean => existsSync(join(fx.dir, "started")) && existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "";
+		for (const deadline = Date.now() + 10000 * TIMEOUT_SCALE; !started() && Date.now() < deadline; ) {
 			await new Promise((r) => setTimeout(r, 20));
 		}
+		expect(started()).toBe(true);
 		session.cancel();
 		expect(await running).toEqual({ kind: "cancelled" });
 		// On Windows the tool, still running in the throwaway directory, keeps it until a later run.
