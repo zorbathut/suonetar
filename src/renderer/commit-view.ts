@@ -11,7 +11,7 @@ import { editorCreate, editorDiffInline, editorDiffSet } from "./editor.ts";
 import { statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
-import { Panes, type PanesSpec } from "./panes.ts";
+import { Panes, type PanesKind, type PanesSpec, panesKindFor } from "./panes.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 import { worktreeLabel } from "./stack-view.ts";
 
@@ -60,14 +60,14 @@ type Section = {
 	readonly saveState: HTMLElement;
 	// Binary content, or too large to show: never gets an editor.
 	readonly opaque: boolean;
-	// The editor holding the file's text, which saves go from; in three panes, the right one.
+	// The editor holding the file's text, which saves go from; in panes, the right one.
 	editor: EditorView | undefined;
 	panes: Panes | undefined;
 	// Where the editor, or the panes holding it, sit in the section's body.
 	slot: HTMLElement | undefined;
 	// The editor's text is saved when edited.
 	writable: boolean;
-	// Built in the other layout, to be switched once it comes near the viewport.
+	// Built in a layout other than the view's, to be switched once it comes near the viewport.
 	layoutStale: boolean;
 	// Says why the file is inline while the view is in three panes; only for files that have to be.
 	layoutNote: HTMLElement | undefined;
@@ -524,14 +524,14 @@ export class CommitView {
 		s.editor = editorCreate(s.slot, {
 			path: f.path,
 			doc,
-			original: panes ? undefined : original,
+			original: panes === undefined ? original : undefined,
 			editable: s.writable,
 			onChange,
 			extensions: [],
 			indentation: f.indentation,
 		});
-		if (panes) {
-			s.panes = new Panes(s.editor, this.#panesSpec(s));
+		if (panes !== undefined) {
+			s.panes = new Panes(s.editor, this.#panesSpec(s, panes));
 			s.slot.replaceChildren(s.panes.root);
 		}
 		this.#layoutNoteUpdate(s);
@@ -548,16 +548,17 @@ export class CommitView {
 		s.layoutStale = false;
 	}
 
-	#panesWanted(s: Section): boolean {
-		return this.#layout === "three" && this.#source.kind === "commit" && !s.file.mineUnknown;
+	#panesWanted(s: Section): PanesKind | undefined {
+		return panesKindFor(this.#layout, this.#source.kind, s.file.mineUnknown);
 	}
 
-	#panesSpec(s: Section): PanesSpec {
+	#panesSpec(s: Section, kind: PanesKind): PanesSpec {
 		const f = s.file;
+		const parent = f.parent === undefined ? undefined : textShow(f.parent);
+		const commit = f.commit === undefined ? undefined : this.#commitText(s);
 		return {
 			path: f.path,
-			parent: f.parent === undefined ? undefined : textShow(f.parent),
-			commit: f.commit === undefined ? undefined : this.#commitText(s),
+			shape: kind === "three" ? { kind, parent, commit } : s.mine ? { kind, leftIs: "commit", left: commit } : { kind, leftIs: "parent", left: parent },
 			revertable: s.writable,
 			indentation: f.indentation,
 		};
@@ -581,15 +582,21 @@ export class CommitView {
 		// Moving the editor's DOM in or out of the panes takes the focus from it, or from whichever pane had it.
 		const active = document.activeElement;
 		const focused = editor.hasFocus || (active !== null && s.panes?.root.contains(active) === true);
-		if (wanted && s.panes === undefined) {
-			s.mine = false;
-			s.panes = new Panes(editor, this.#panesSpec(s));
-			slot.replaceChildren(s.panes.root);
-		} else if (!wanted && s.panes !== undefined) {
+		if (s.panes !== undefined && s.panes.kind !== wanted) {
 			s.panes.destroy();
 			s.panes = undefined;
-			slot.replaceChildren(editor.dom);
-			editorDiffSet(editor, editorDiffInline(s.mine ? this.#commitText(s) : textShow(s.file.parent), s.writable));
+			if (wanted === undefined) {
+				slot.replaceChildren(editor.dom);
+				editorDiffSet(editor, editorDiffInline(s.mine ? this.#commitText(s) : textShow(s.file.parent), s.writable));
+			}
+		}
+		if (wanted !== undefined && s.panes === undefined) {
+			// Three panes show the edits against the commit already.
+			if (wanted === "three") {
+				s.mine = false;
+			}
+			s.panes = new Panes(editor, this.#panesSpec(s, wanted));
+			slot.replaceChildren(s.panes.root);
 		}
 		if (focused && !editor.hasFocus) {
 			editor.focus();
@@ -712,7 +719,7 @@ export class CommitView {
 		if (!this.#editable || s.opaque) {
 			return;
 		}
-		if ((s.edited || s.mine) && s.editor !== undefined && s.panes === undefined && f.draft !== undefined && f.commit !== undefined) {
+		if ((s.edited || s.mine) && s.editor !== undefined && s.panes?.kind !== "three" && f.draft !== undefined && f.commit !== undefined) {
 			s.actions.append(
 				button(s.mine ? "Show whole change" : "Show my edits", () =>
 					this.#rework("Switching the diff", async () => {

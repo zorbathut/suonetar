@@ -28,6 +28,8 @@ export function darkMode(): boolean {
 	return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
+export const REVERT_CHUNK_TITLE = "Take this chunk out of the commit and every commit above it";
+
 function mergeControl(type: "reject" | "accept", action: (e: MouseEvent) => void): HTMLElement {
 	// Only Reject: Accept would edit the original side, which is never saved, and just hide the change.
 	const node = document.createElement("button");
@@ -38,7 +40,7 @@ function mergeControl(type: "reject" | "accept", action: (e: MouseEvent) => void
 	}
 	node.name = "reject";
 	node.textContent = "Revert chunk";
-	node.title = "Take this chunk out of the commit and every commit above it";
+	node.title = REVERT_CHUNK_TITLE;
 	node.addEventListener("mousedown", action);
 	return node;
 }

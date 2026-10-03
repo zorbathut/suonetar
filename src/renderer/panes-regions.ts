@@ -4,7 +4,7 @@ import type { Text } from "@codemirror/state";
 // A chunk as line ranges, each end exclusive and counted from 0: lines [a0, a1) of the older document against [b0, b1) of the newer.
 export type LinesPair = { readonly a0: number; readonly a1: number; readonly b0: number; readonly b1: number };
 
-// Lines of the three panes that sit side by side: the parent's [a0, a1), the commit's [b0, b1), and the edited [c0, c1). A region flagged neither `ab` nor `bc` is unchanged in all three, and holds the same lines in each.
+// Lines of the three documents that sit side by side: the parent's [a0, a1), the commit's [b0, b1), and the edited [c0, c1). A region flagged neither `ab` nor `bc` is unchanged in all three, and holds the same lines in each. Two panes tile the same way with the left pane's text as both a and b.
 export type RegionThree = {
 	readonly a0: number;
 	readonly a1: number;
@@ -111,7 +111,7 @@ export function panesFolds(regions: readonly RegionThree[], margin: number, minS
 	return folds;
 }
 
-// The folds that still lie in the foldable lines of an unchanged region, placed anew in each pane. Folds are only ever dropped, as edits come near them, never added: a line just put back as the commit had it stays in view, as in CodeMirror's own merge views.
+// The folds that still lie in the foldable lines of an unchanged region, placed anew in each pane. Folds are only ever dropped, as edits come near them, never added: a line just reverted stays in view, as in CodeMirror's own merge views.
 export function panesFoldsKeep(folds: readonly RegionThree[], regions: readonly RegionThree[], margin: number): RegionThree[] {
 	const end = regions.at(-1)?.b1 ?? 0;
 	const kept: RegionThree[] = [];
@@ -128,7 +128,7 @@ export function panesFoldsKeep(folds: readonly RegionThree[], regions: readonly 
 	return kept;
 }
 
-// The change that puts a chunk of the commit (a side) against the edited version (b side) back as the commit has it. Adapted from MergeView.revertClicked in @codemirror/merge (MIT, Marijn Haverbeke and others).
+// The change that puts a chunk of the middle document (a side) against the edited version (b side) back as the middle has it. Adapted from MergeView.revertClicked in @codemirror/merge (MIT, Marijn Haverbeke and others).
 export function panesRevert(chunk: Chunk, middle: Text, right: Text): { readonly from: number; readonly to: number; readonly insert: string } {
 	let insert = middle.sliceString(chunk.fromA, Math.max(chunk.fromA, chunk.toA - 1));
 	if (chunk.fromA !== chunk.toA && chunk.toB <= right.length) {

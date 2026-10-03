@@ -14,6 +14,15 @@ function pairs(a: Text, b: Text): LinesPair[] {
 	return Chunk.build(a, b, CONF).map((c) => chunkLines(c, a, b));
 }
 
+// A repeatable stream of whole numbers below `n`.
+function seeded(seed: number): (n: number) => number {
+	let state = seed;
+	return (n) => {
+		state = (state * 1103515245 + 12345) % 2 ** 31;
+		return state % n;
+	};
+}
+
 function lines(doc: Text, from: number, to: number): string[] {
 	const out: string[] = [];
 	for (let n = from; n < to; n++) {
@@ -135,11 +144,7 @@ describe("panesRegions", () => {
 	});
 
 	it("keeps its invariants over random edits, and after updating chunks as the right side changes", () => {
-		let seed = 7;
-		const random = (n: number): number => {
-			seed = (seed * 1103515245 + 12345) % 2 ** 31;
-			return seed % n;
-		};
+		const random = seeded(7);
 		const words = ["a", "b", "c", "{", "}", "", "foo", "bar"];
 		const mutate = (lines: readonly string[]): string[] => {
 			const out = [...lines];
@@ -175,6 +180,36 @@ describe("panesRegions", () => {
 			c = next;
 			const bc = chunks.map((k) => chunkLines(k, b, c));
 			invariantsCheck(a, b, c, ab, bc, panesRegions(ab, bc, { a: a.lines, b: b.lines, c: c.lines }));
+		}
+	});
+});
+
+describe("panesRegions in two panes", () => {
+	it("tiles the left pane against the right with the left as the middle document, keeping folds on the left's lines as the right changes", () => {
+		const random = seeded(11);
+		const many = Array.from({ length: 60 }, (_, i) => `l${i}`);
+		for (let round = 0; round < 200; round++) {
+			const left = text([...many.slice(0, random(30)), "old", ...many.slice(30)].join("\n"));
+			let right = text(left.toString().replace("old", random(2) === 0 ? "new" : "new\nmore"));
+			let chunks = Chunk.build(left, right, CONF);
+			const tiling = (): RegionThree[] => {
+				const bc = chunks.map((k) => chunkLines(k, left, right));
+				const regions = panesRegions([], bc, { a: left.lines, b: left.lines, c: right.lines });
+				invariantsCheck(left, left, right, [], bc, regions);
+				expect(regions.every((r) => r.a0 === r.b0 && r.a1 === r.b1 && !r.ab)).toBe(true);
+				expect(panesStops(regions)).toHaveLength(regions.filter((r) => r.bc).length);
+				return regions;
+			};
+			const folds = panesFolds(tiling(), 3, 6);
+			const at = right.line(1 + random(right.lines)).from;
+			const change = { from: at, to: at, insert: random(2) === 0 ? "typed\n" : "x" };
+			const next = right.replace(change.from, change.to, text(change.insert));
+			chunks = Chunk.updateB(chunks, left, next, ChangeSet.of([change], right.length), CONF);
+			right = next;
+			for (const f of panesFoldsKeep(folds, tiling(), 3)) {
+				expect(folds.some((g) => g.b0 === f.b0 && g.b1 === f.b1)).toBe(true);
+				expect(lines(right, f.c0, f.c1)).toEqual(lines(left, f.a0, f.a1));
+			}
 		}
 	});
 });

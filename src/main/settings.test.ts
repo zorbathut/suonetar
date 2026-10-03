@@ -25,6 +25,8 @@ describe("settings", () => {
 		const path = file();
 		await settingsLayoutWrite(path, "three");
 		expect(await settingsLayoutRead(path)).toBe("three");
+		await settingsLayoutWrite(path, "two");
+		expect(await settingsLayoutRead(path)).toBe("two");
 		await settingsLayoutWrite(path, "inline");
 		expect(await settingsLayoutRead(path)).toBe("inline");
 	});

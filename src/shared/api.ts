@@ -60,9 +60,9 @@ export type SuonetarApi = {
 	readonly cancel: () => Promise<Result<undefined>>;
 };
 
-// How a commit's files show their diff: one editor with the changes inline, or the parent, the commit and the edited version side by side.
-export type Layout = "inline" | "three";
-export const LAYOUTS: readonly Layout[] = ["inline", "three"];
+// How a commit's files show their diff: one editor with the changes inline, or side by side the parent and the edited version, or the parent, the commit and the edited version.
+export type Layout = "inline" | "two" | "three";
+export const LAYOUTS: readonly Layout[] = ["inline", "two", "three"];
 
 // Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.
 export type SuonetarShell = {
