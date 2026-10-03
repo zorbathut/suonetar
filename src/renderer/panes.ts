@@ -18,7 +18,7 @@ const EPSILON = 0.01;
 // An unchanged run longer than this many characters also lines up at the top of the visible area, since heights further into it may still be estimates.
 const SYNC_RUN_MIN = 1000;
 
-export type PanesThreeSpec = {
+export type PanesSpec = {
 	readonly path: string;
 	// The parent's version and the commit's own, restacked; undefined where the file is absent.
 	readonly parent: string | undefined;
@@ -234,7 +234,7 @@ type PaneAlign = {
 };
 
 // A file's parent, the commit's own version and the edited version side by side, with unchanged lines kept level. The right pane is the section's own editor, taken over while the panes exist and handed back by `release`.
-export class PanesThree {
+export class Panes {
 	readonly root: HTMLElement;
 	readonly #right: EditorView;
 	readonly #left: EditorView;
@@ -252,7 +252,7 @@ export class PanesThree {
 	#destroyed = false;
 
 	// Takes `right` into the panes' right-hand cell; the caller puts `root` in the page.
-	constructor(right: EditorView, spec: PanesThreeSpec) {
+	constructor(right: EditorView, spec: PanesSpec) {
 		this.#right = right;
 		this.#parent = Text.of((spec.parent ?? "").split("\n"));
 		this.#commit = Text.of((spec.commit ?? "").split("\n"));
@@ -308,7 +308,7 @@ export class PanesThree {
 		const rightCell = cell(undefined, "With your edits", false);
 		this.root = el(
 			"div",
-			{ class: "panes-three" },
+			{ class: "panes" },
 			cell(this.#left, "Before this commit", spec.parent === undefined),
 			cell(this.#middle, "This commit", spec.commit === undefined),
 			rightCell,

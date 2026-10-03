@@ -694,7 +694,7 @@ section.record {
 }
 
 /* Three panes side by side: the parent, the commit, the edited version. Equal columns, and a gap rather than borders, so the panes' text is equally wide and unchanged lines wrap alike. */
-.panes-three {
+.panes {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 1px;
@@ -717,8 +717,8 @@ section.record {
 	text-overflow: ellipsis;
 }
 
-/* As wide in every pane as the longest of the three files needs (set on .panes-three). */
-.panes-three .cm-lineNumbers .cm-gutterElement {
+/* As wide in every pane as the longest of the three files needs (set on .panes). */
+.panes .cm-lineNumbers .cm-gutterElement {
 	min-width: calc(var(--panes-digits, 2) * 1ch + 8px);
 }
 

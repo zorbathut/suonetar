@@ -11,7 +11,7 @@ import { editorCreate, editorDiffInline, editorDiffSet } from "./editor.ts";
 import { statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
-import { PanesThree, type PanesThreeSpec } from "./panes-three.ts";
+import { Panes, type PanesSpec } from "./panes.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 import { worktreeLabel } from "./stack-view.ts";
 
@@ -62,7 +62,7 @@ type Section = {
 	readonly opaque: boolean;
 	// The editor holding the file's text, which saves go from; in three panes, the right one.
 	editor: EditorView | undefined;
-	panes: PanesThree | undefined;
+	panes: Panes | undefined;
 	// Where the editor, or the panes holding it, sit in the section's body.
 	slot: HTMLElement | undefined;
 	// The editor's text is saved when edited.
@@ -531,7 +531,7 @@ export class CommitView {
 			indentation: f.indentation,
 		});
 		if (panes) {
-			s.panes = new PanesThree(s.editor, this.#panesSpec(s));
+			s.panes = new Panes(s.editor, this.#panesSpec(s));
 			s.slot.replaceChildren(s.panes.root);
 		}
 		this.#layoutNoteUpdate(s);
@@ -552,7 +552,7 @@ export class CommitView {
 		return this.#layout === "three" && this.#source.kind === "commit" && !s.file.mineUnknown;
 	}
 
-	#panesSpec(s: Section): PanesThreeSpec {
+	#panesSpec(s: Section): PanesSpec {
 		const f = s.file;
 		return {
 			path: f.path,
@@ -583,7 +583,7 @@ export class CommitView {
 		const focused = editor.hasFocus || (active !== null && s.panes?.root.contains(active) === true);
 		if (wanted && s.panes === undefined) {
 			s.mine = false;
-			s.panes = new PanesThree(editor, this.#panesSpec(s));
+			s.panes = new Panes(editor, this.#panesSpec(s));
 			slot.replaceChildren(s.panes.root);
 		} else if (!wanted && s.panes !== undefined) {
 			s.panes.destroy();

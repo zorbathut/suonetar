@@ -1,7 +1,7 @@
 import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
+import { rightChunksField } from "./panes.ts";
 import { panesRevert } from "./panes-regions.ts";
-import { rightChunksField } from "./panes-three.ts";
 
 describe("rightChunksField", () => {
 	const lines = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", ""];
