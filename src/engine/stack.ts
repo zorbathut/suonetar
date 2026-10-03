@@ -116,8 +116,12 @@ async function baseFind(repo: Repo, branch: string, tipOid: Oid, base: string | 
 			continue;
 		}
 		const result = await repo.run(["merge-base", ref, tipOid], { cwd: repo.worktree });
-		if (result.code !== 0) {
+		// Exit 1: no history in common with the branch, so no base. Anything else is git failing.
+		if (result.code === 1) {
 			continue;
+		}
+		if (result.code !== 0) {
+			throw new Error(`git merge-base ${ref} ${tipOid} failed: ${result.stderr}`);
 		}
 		const mergeBase = result.stdout.toString("utf8").trim();
 		// A copy that already has every commit of the branch leaves nothing unpushed, so the default branch decides.

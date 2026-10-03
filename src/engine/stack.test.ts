@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { ErrorNoBase, ErrorNotOnBranch } from "./errors.ts";
 import { CatFile } from "./objects.ts";
@@ -52,6 +53,31 @@ describe("stackRead", () => {
 		fx.git("config", "--unset", "suonetar.base");
 		fx.git("switch", "-q", "master");
 		await expect(stackRead(fx.repo, cat, undefined)).rejects.toBeInstanceOf(ErrorNoBase);
+	});
+
+	test("a candidate sharing no history with the branch is passed over", async () => {
+		const base = fx.git("rev-parse", "HEAD");
+		const tree = fx.git("rev-parse", "HEAD^{tree}");
+		fx.git("update-ref", "refs/remotes/origin/main", fx.git("commit-tree", "-m", "unrelated", tree));
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		const stack = await stackRead(fx.repo, cat, undefined);
+		expect(stack.baseRef).toBe("refs/heads/main");
+		expect(stack.baseOid).toBe(base);
+	});
+
+	test("a candidate whose history git cannot read fails the read rather than being passed over", async () => {
+		const tree = fx.git("rev-parse", "HEAD^{tree}");
+		// A commit naming a parent that is not in the repository.
+		const broken = execFileSync("git", ["hash-object", "-t", "commit", "-w", "--literally", "--stdin"], {
+			cwd: fx.dir,
+			input: `tree ${tree}\nparent ${"1".repeat(40)}\nauthor A <a@a> 1700000000 +0000\ncommitter A <a@a> 1700000000 +0000\n\nbroken\n`,
+			encoding: "utf8",
+		}).trim();
+		fx.git("update-ref", "refs/remotes/origin/main", broken);
+		fx.git("switch", "-q", "-c", "feature");
+		fx.commit("one", { "a.txt": "1\n" });
+		await expect(stackRead(fx.repo, cat, undefined)).rejects.toThrow(/merge-base/);
 	});
 
 	test("prefers a remote base whose merge-base is newer than the stale local one", async () => {
