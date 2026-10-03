@@ -46,6 +46,8 @@ const shell: SuonetarShell = {
 	onApplyProgress(handler) {
 		ipcRenderer.on(APPLY_PROGRESS_CHANNEL, (_event, progress: ApplyProgress) => handler(progress));
 	},
+	layoutRead: () => ipcRenderer.invoke("suonetar:layout-read"),
+	layoutSave: (layout) => ipcRenderer.send("suonetar:layout-save", layout),
 };
 
 contextBridge.exposeInMainWorld("suonetar", api);

@@ -14,6 +14,12 @@
 	--error: #cf222e;
 	--draft: #8250df;
 	--marker-bg: rgba(255, 170, 0, 0.18);
+	--pane-removed-line: rgba(160, 128, 100, 0.08);
+	--pane-removed-text: #ee443366;
+	--pane-added-line: rgba(100, 160, 128, 0.08);
+	--pane-added-text: #22bb22aa;
+	--pane-mine-text: rgba(130, 80, 223, 0.18);
+	--pane-fold-bg: #f3f3f3;
 	color-scheme: light;
 }
 
@@ -34,6 +40,10 @@
 		--error: #f85149;
 		--draft: #a371f7;
 		--marker-bg: rgba(255, 170, 0, 0.14);
+		--pane-removed-text: #ffaa9966;
+		--pane-added-text: #88ff88aa;
+		--pane-mine-text: rgba(163, 113, 247, 0.24);
+		--pane-fold-bg: #222222;
 		color-scheme: dark;
 	}
 }
@@ -638,4 +648,117 @@ section.record {
 	display: flex;
 	gap: 8px;
 	justify-content: flex-end;
+}
+
+/* The layout choice in the top bar, as one control of two halves. */
+.segmented {
+	position: relative;
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	overflow: hidden;
+	flex: none;
+}
+
+.segmented label {
+	padding: 2px 10px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.segmented label + label {
+	border-left: 1px solid var(--border);
+}
+
+.segmented[hidden] {
+	display: none;
+}
+
+/* Out of sight but still in the tab order, so the choice can be made from the keyboard. */
+.segmented input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.segmented label:has(input:focus-visible) {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+.segmented label:has(input:checked) {
+	background: var(--accent);
+	color: var(--accent-fg);
+}
+
+/* Three panes side by side: the parent, the commit, the edited version. Equal columns, and a gap rather than borders, so the panes' text is equally wide and unchanged lines wrap alike. */
+.panes-three {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 1px;
+	background: var(--border);
+}
+
+.pane {
+	min-width: 0;
+	background: var(--bg);
+}
+
+.pane-caption {
+	padding: 2px 8px;
+	font-size: 11px;
+	color: var(--fg-dim);
+	background: var(--bg-alt);
+	border-bottom: 1px solid var(--border);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* As wide in every pane as the longest of the three files needs (set on .panes-three). */
+.panes-three .cm-lineNumbers .cm-gutterElement {
+	min-width: calc(var(--panes-digits, 2) * 1ch + 8px);
+}
+
+.cm-pane-revert {
+	width: 1.4em;
+}
+
+.cm-pane-revert .cm-gutterElement span {
+	cursor: pointer;
+	color: var(--draft);
+}
+
+.cm-pane-removedLine {
+	background-color: var(--pane-removed-line);
+}
+
+.cm-pane-removedText {
+	background: linear-gradient(var(--pane-removed-text), var(--pane-removed-text)) bottom / 100% 2px no-repeat;
+}
+
+.cm-pane-addedLine {
+	background-color: var(--pane-added-line);
+}
+
+.cm-pane-addedText {
+	background: linear-gradient(var(--pane-added-text), var(--pane-added-text)) bottom / 100% 2px no-repeat;
+}
+
+/* What the edit changed, in the colour drafts have elsewhere: a stripe down the line's edge, and its text tinted. */
+.cm-pane-mineLine {
+	box-shadow: inset 3px 0 var(--draft);
+}
+
+.cm-pane-mineText {
+	background-color: var(--pane-mine-text);
+}
+
+.cm-pane-fold {
+	padding: 4px 5px 4px 10px;
+	cursor: pointer;
+	color: var(--fg-dim);
+	background: linear-gradient(to bottom, transparent 0, var(--pane-fold-bg) 30%, var(--pane-fold-bg) 70%, transparent 100%);
 }

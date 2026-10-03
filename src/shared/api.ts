@@ -60,6 +60,10 @@ export type SuonetarApi = {
 	readonly cancel: () => Promise<Result<undefined>>;
 };
 
+// How a commit's files show their diff: one editor with the changes inline, or the parent, the commit and the edited version side by side.
+export type Layout = "inline" | "three";
+export const LAYOUTS: readonly Layout[] = ["inline", "three"];
+
 // Window lifecycle: closing the window asks the renderer first, so pending saves are flushed before anything is torn down.
 export type SuonetarShell = {
 	// The open repository's worktree, or undefined before one is opened.
@@ -70,6 +74,10 @@ export type SuonetarShell = {
 	readonly onCloseRequest: (handler: () => Promise<boolean>) => void;
 	// Progress of the apply this page started.
 	readonly onApplyProgress: (handler: (progress: ApplyProgress) => void) => void;
+	// The layout last chosen in any window.
+	readonly layoutRead: () => Promise<Layout>;
+	// Remembers the layout for windows opened from now on.
+	readonly layoutSave: (layout: Layout) => void;
 };
 
 export const APPLY_PROGRESS_CHANNEL = "suonetar:apply-progress";

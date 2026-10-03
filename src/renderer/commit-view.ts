@@ -2,15 +2,16 @@ import { getChunks } from "@codemirror/merge";
 import { EditorView } from "@codemirror/view";
 import type { CommitDocument, DocumentFile } from "../engine/session.ts";
 import type { WorktreeSide } from "../engine/worktree-changes.ts";
-import type { Wire } from "../shared/api.ts";
+import type { Layout, Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
-import { editorCreate } from "./editor.ts";
+import { editorCreate, editorDiffInline, editorDiffSet } from "./editor.ts";
 import { statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
+import { PanesThree, type PanesThreeSpec } from "./panes-three.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 import { worktreeLabel } from "./stack-view.ts";
 
@@ -46,6 +47,8 @@ export type CommitViewHost = {
 	readonly files: HTMLElement;
 	// Collapsed directories in that tree, by path; kept by the host so they survive switching commits.
 	readonly collapsed: Set<string>;
+	// The layout a new view starts in.
+	readonly layout: () => Layout;
 };
 
 type Section = {
@@ -57,7 +60,17 @@ type Section = {
 	readonly saveState: HTMLElement;
 	// Binary content, or too large to show: never gets an editor.
 	readonly opaque: boolean;
+	// The editor holding the file's text, which saves go from; in three panes, the right one.
 	editor: EditorView | undefined;
+	panes: PanesThree | undefined;
+	// Where the editor, or the panes holding it, sit in the section's body.
+	slot: HTMLElement | undefined;
+	// The editor's text is saved when edited.
+	writable: boolean;
+	// Built in the other layout, to be switched once it comes near the viewport.
+	layoutStale: boolean;
+	// Says why the file is inline while the view is in three panes; only for files that have to be.
+	layoutNote: HTMLElement | undefined;
 	expanded: boolean;
 	// Collapsed when the view was built (large or generated), so expanding it was the reader's choice.
 	readonly collapsedAtFirst: boolean;
@@ -70,7 +83,12 @@ type Section = {
 	shownOid: string | undefined;
 };
 
+// A line of a file the reader is at, and how far below the top of the view its text starts.
+type Place = { readonly section: Section; readonly pos: number; readonly offset: number };
+
 const LARGE_LINES = 5000;
+// Frames the reader's place is held for after a layout switch, while the switched sections lay out, fold and line up (each takes a frame or two, and the sections switched as they come near take their own).
+const PLACE_HOLD_FRAMES = 30;
 const LOCKFILE =
 	/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|packages\.lock\.json)$/;
 
@@ -105,6 +123,8 @@ export class CommitView {
 	readonly #tree: readonly TreeNode[];
 	readonly #notes: readonly string[];
 	#destroyed = false;
+	#layout: Layout;
+	#placeFrame: number | undefined;
 	#pointerDown = false;
 	readonly #pointerUp = () => {
 		this.#pointerDown = false;
@@ -124,6 +144,7 @@ export class CommitView {
 		this.#source = source;
 		this.#doc = doc;
 		this.#notes = notes;
+		this.#layout = host.layout();
 		this.#banners = el("div", { class: "banners" });
 		this.root = el("div", { class: "commit-view" }, this.#banners);
 		this.#observer = new IntersectionObserver((entries) => this.#onVisible(entries), { root: host.scroller, rootMargin: "1500px 0px" });
@@ -201,6 +222,7 @@ export class CommitView {
 		if (this.#highlightFrame !== undefined) {
 			cancelAnimationFrame(this.#highlightFrame);
 		}
+		this.#placeRelease();
 		// Emptied but left shown: the next commit view fills it, and hiding it in between would resize the stack pane under its own scrolling. Views without files hide it.
 		this.#host.files.replaceChildren();
 		this.#observer.disconnect();
@@ -392,6 +414,11 @@ export class CommitView {
 			saveState,
 			opaque,
 			editor: undefined,
+			panes: undefined,
+			slot: undefined,
+			writable: false,
+			layoutStale: false,
+			layoutNote: undefined,
 			expanded: !large,
 			collapsedAtFirst: large,
 			mine: false,
@@ -423,6 +450,8 @@ export class CommitView {
 			const section = this.#sections.find((s) => s.body === entry.target);
 			if (section !== undefined && section.editor === undefined) {
 				this.#editorBuild(section, undefined);
+			} else if (section?.layoutStale) {
+				this.#layoutApply(section);
 			}
 		}
 	}
@@ -480,15 +509,161 @@ export class CommitView {
 		if (note !== undefined) {
 			s.body.append(el("div", { class: "note", text: note }));
 		}
+		if (this.#source.kind === "commit" && f.mineUnknown) {
+			s.layoutNote = el("div", {
+				class: "note",
+				text: "Shown inline: this commit's original change to the file conflicts with the edits below it, so there is no version without your edits to show beside them.",
+			});
+			s.body.append(s.layoutNote);
+		}
 		const onChange = codec === undefined ? undefined : this.#onChange(s, codec);
-		s.editor = editorCreate(s.body, { path: f.path, doc, original, editable: codec !== undefined, onChange, extensions: [], indentation: f.indentation });
+		s.writable = codec !== undefined;
+		const panes = this.#panesWanted(s);
+		s.slot = el("div", {});
+		s.body.append(s.slot);
+		s.editor = editorCreate(s.slot, {
+			path: f.path,
+			doc,
+			original: panes ? undefined : original,
+			editable: s.writable,
+			onChange,
+			extensions: [],
+			indentation: f.indentation,
+		});
+		if (panes) {
+			s.panes = new PanesThree(s.editor, this.#panesSpec(s));
+			s.slot.replaceChildren(s.panes.root);
+		}
+		this.#layoutNoteUpdate(s);
 		this.#headerUpdate(s);
 	}
 
 	#editorDestroy(s: Section): void {
+		s.panes?.destroy();
+		s.panes = undefined;
 		s.editor?.destroy();
 		s.editor = undefined;
+		s.slot = undefined;
+		s.layoutNote = undefined;
+		s.layoutStale = false;
 	}
+
+	#panesWanted(s: Section): boolean {
+		return this.#layout === "three" && this.#source.kind === "commit" && !s.file.mineUnknown;
+	}
+
+	#panesSpec(s: Section): PanesThreeSpec {
+		const f = s.file;
+		return {
+			path: f.path,
+			parent: f.parent === undefined ? undefined : textShow(f.parent),
+			commit: f.commit === undefined ? undefined : this.#commitText(s),
+			revertable: s.writable,
+			indentation: f.indentation,
+		};
+	}
+
+	#layoutNoteUpdate(s: Section): void {
+		if (s.layoutNote !== undefined) {
+			s.layoutNote.hidden = this.#layout !== "three";
+		}
+	}
+
+	// Switches a built section to the view's layout, keeping its editor (and so its undo history and unsaved text).
+	#layoutApply(s: Section): void {
+		s.layoutStale = false;
+		const editor = s.editor;
+		const slot = s.slot;
+		if (editor === undefined || slot === undefined) {
+			return;
+		}
+		const wanted = this.#panesWanted(s);
+		// Moving the editor's DOM in or out of the panes takes the focus from it, or from whichever pane had it.
+		const active = document.activeElement;
+		const focused = editor.hasFocus || (active !== null && s.panes?.root.contains(active) === true);
+		if (wanted && s.panes === undefined) {
+			s.mine = false;
+			s.panes = new PanesThree(editor, this.#panesSpec(s));
+			slot.replaceChildren(s.panes.root);
+		} else if (!wanted && s.panes !== undefined) {
+			s.panes.destroy();
+			s.panes = undefined;
+			slot.replaceChildren(editor.dom);
+			editorDiffSet(editor, editorDiffInline(s.mine ? this.#commitText(s) : textShow(s.file.parent), s.writable));
+		}
+		if (focused && !editor.hasFocus) {
+			editor.focus();
+		}
+		this.#layoutNoteUpdate(s);
+		this.#headerUpdate(s);
+	}
+
+	// Changes the layout in place: every built section is marked to switch, and observed afresh, so the observer reports those near the viewport at once (and switches them) and the rest as they come near. The reader's place is held while the switched sections settle.
+	layoutSet(layout: Layout): void {
+		if (this.#destroyed || layout === this.#layout) {
+			return;
+		}
+		const place = this.#placeTake();
+		this.#layout = layout;
+		for (const s of this.#sections) {
+			if (s.editor !== undefined) {
+				s.layoutStale = true;
+				this.#observer.unobserve(s.body);
+				this.#observer.observe(s.body);
+			}
+		}
+		this.#placeHold(place);
+	}
+
+	// The line of the file at the top of the view, and how far below the view's top it is.
+	#placeTake(): Place | undefined {
+		const section = this.#sections[this.#sectionCurrent()];
+		const editor = section?.editor;
+		if (section === undefined || editor === undefined) {
+			return undefined;
+		}
+		const top = this.#host.scroller.getBoundingClientRect().top;
+		const pos = editor.lineBlockAtHeight(top - editor.documentTop).from;
+		return { section, pos, offset: this.#placeTop(editor, pos) - top };
+	}
+
+	// Where a line's text starts on screen; spacers and folds above it in its own line block are not part of it.
+	#placeTop(editor: EditorView, pos: number): number {
+		return editor.coordsAtPos(pos, 1)?.top ?? editor.documentTop + editor.lineBlockAt(pos).top;
+	}
+
+	// Keeps the reader's place for a few frames while the switched sections lay out and line up, unless the reader moves first.
+	#placeHold(place: Place | undefined): void {
+		this.#placeRelease();
+		if (place === undefined) {
+			return;
+		}
+		let frames = 0;
+		const scroller = this.#host.scroller;
+		const tick = (): void => {
+			const editor = place.section.editor;
+			if (this.#destroyed || editor === undefined || ++frames > PLACE_HOLD_FRAMES) {
+				this.#placeRelease();
+				return;
+			}
+			scroller.scrollTop += this.#placeTop(editor, Math.min(place.pos, editor.state.doc.length)) - scroller.getBoundingClientRect().top - place.offset;
+			this.#placeFrame = requestAnimationFrame(tick);
+		};
+		for (const type of ["wheel", "pointerdown", "keydown"]) {
+			window.addEventListener(type, this.#placeRelease, { once: true, capture: true });
+		}
+		tick();
+	}
+
+	readonly #placeRelease = (): void => {
+		if (this.#placeFrame !== undefined) {
+			cancelAnimationFrame(this.#placeFrame);
+			this.#placeFrame = undefined;
+		}
+		for (const type of ["wheel", "pointerdown", "keydown"]) {
+			window.removeEventListener(type, this.#placeRelease, { capture: true });
+		}
+	};
 
 	#onChange(s: Section, codec: TextCodec): () => void {
 		const oid = this.#doc.oid;
@@ -537,7 +712,7 @@ export class CommitView {
 		if (!this.#editable || s.opaque) {
 			return;
 		}
-		if ((s.edited || s.mine) && s.editor !== undefined && f.draft !== undefined && f.commit !== undefined) {
+		if ((s.edited || s.mine) && s.editor !== undefined && s.panes === undefined && f.draft !== undefined && f.commit !== undefined) {
 			s.actions.append(
 				button(s.mine ? "Show whole change" : "Show my edits", () =>
 					this.#rework("Switching the diff", async () => {
@@ -623,16 +798,19 @@ export class CommitView {
 				continue;
 			}
 			this.#editorBuild(s, undefined);
+			if (s.layoutStale) {
+				this.#layoutApply(s);
+			}
 			const view = s.editor;
-			const chunks = view === undefined ? undefined : getChunks(view.state)?.chunks;
-			if (view === undefined || chunks === undefined || chunks.length === 0) {
+			const stops = view === undefined ? undefined : (s.panes?.stops() ?? getChunks(view.state)?.chunks.map((c) => c.fromB));
+			if (view === undefined || stops === undefined || stops.length === 0) {
 				continue;
 			}
-			const head = i === start && fromCursor ? view.state.selection.main.head : dir > 0 ? -1 : view.state.doc.length + 1;
-			const target = dir > 0 ? chunks.find((c) => c.fromB > head) : chunks.findLast((c) => c.fromB < head);
+			const head = i === start && fromCursor ? (s.panes?.head() ?? view.state.selection.main.head) : dir > 0 ? -1 : view.state.doc.length + 1;
+			const target = dir > 0 ? stops.find((p) => p > head) : stops.findLast((p) => p < head);
 			if (target !== undefined) {
 				view.focus();
-				view.dispatch({ selection: { anchor: target.fromB }, effects: EditorView.scrollIntoView(target.fromB, { y: "center" }) });
+				view.dispatch({ selection: { anchor: target }, effects: EditorView.scrollIntoView(target, { y: "center" }) });
 				return;
 			}
 		}

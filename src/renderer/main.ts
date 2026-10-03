@@ -2,7 +2,7 @@ import "./style.css";
 import type { PublishResult } from "../engine/apply.ts";
 import type { HookChoice } from "../engine/session.ts";
 import type { WorktreeSide } from "../engine/worktree-changes.ts";
-import type { ApiValue, Wire } from "../shared/api.ts";
+import { type ApiValue, LAYOUTS, type Layout, type Wire } from "../shared/api.ts";
 import { api, call, errorText } from "./api.ts";
 import { Autosave } from "./autosave.ts";
 import { CommitView, type CommitViewHost } from "./commit-view.ts";
@@ -27,6 +27,7 @@ const undoEl = byId("undo");
 const applyEl = byId("apply");
 const cancelEl = byId("cancel");
 const statusEl = byId("status");
+const layoutEl = byId("layout");
 const sideEl = byId("side");
 const stackEl = byId("stack");
 // The changed-files pane: commit views fill it; every other view hides it, giving the stack the whole sidebar.
@@ -195,7 +196,34 @@ async function stateRead(): Promise<SessionState> {
 	return state;
 }
 
-const commitHost: CommitViewHost = { autosave, scroller: docEl, op, reload: commitReload, files: filesEl, collapsed: new Set() };
+// Read from the settings before the first view is shown.
+let layout: Layout = "inline";
+
+function layoutRadiosSet(): void {
+	for (const input of layoutEl.querySelectorAll("input")) {
+		input.checked = input.value === layout;
+	}
+}
+
+// The toolbar's choice of layout, remembered for windows opened later; a shown commit switches in place.
+for (const input of layoutEl.querySelectorAll("input")) {
+	const choice = LAYOUTS.find((l) => l === input.value);
+	if (choice === undefined) {
+		throw new Error(`index.html offers an unknown layout ${input.value}`);
+	}
+	input.addEventListener("change", () => {
+		if (!input.checked) {
+			return;
+		}
+		layout = choice;
+		window.suonetarShell.layoutSave(choice);
+		if (view.kind === "commit") {
+			view.view.layoutSet(choice);
+		}
+	});
+}
+
+const commitHost: CommitViewHost = { autosave, scroller: docEl, op, reload: commitReload, files: filesEl, collapsed: new Set(), layout: () => layout };
 
 function stackRedraw(): void {
 	if (ready === undefined) {
@@ -253,6 +281,7 @@ function busySet(value: boolean): void {
 	document.body.classList.toggle("busy", value);
 	sideEl.inert = value;
 	docEl.inert = value;
+	layoutEl.inert = value;
 	if (applyEl instanceof HTMLButtonElement) {
 		applyEl.disabled = value;
 	}
@@ -998,6 +1027,7 @@ async function poll(): Promise<void> {
 function welcomeShow(): void {
 	filesEl.hidden = true;
 	applyEl.hidden = true;
+	layoutEl.hidden = true;
 	docEl.replaceChildren(
 		el(
 			"div",
@@ -1011,8 +1041,10 @@ function welcomeShow(): void {
 	);
 }
 
-void window.suonetarShell.repository().then(
-	(repository) => {
+void Promise.all([window.suonetarShell.repository(), window.suonetarShell.layoutRead()]).then(
+	([repository, chosen]) => {
+		layout = chosen;
+		layoutRadiosSet();
 		if (repository === undefined) {
 			welcomeShow();
 			return;

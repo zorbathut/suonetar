@@ -2,9 +2,11 @@ import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
 import { ErrorNotRepository } from "../engine/errors.ts";
 import { Session } from "../engine/session.ts";
+import { LAYOUTS } from "../shared/api.ts";
 import { argumentsRead } from "./arguments.ts";
 import { ErrorIpcArgument, ipcRegister } from "./ipc.ts";
 import { SessionSlot } from "./session-slot.ts";
+import { settingsLayoutRead, settingsLayoutWrite } from "./settings.ts";
 
 function log(message: string, err: unknown): void {
 	console.error(`suonetar: ${message}:`, err);
@@ -252,6 +254,28 @@ async function main(): Promise<void> {
 		if (trusted(event.sender)) {
 			repoChoose();
 		}
+	});
+	const layoutFile = join(app.getPath("userData"), "layout.json");
+	// One write at a time, in the order chosen, so the file ends up holding the last choice.
+	let layoutWriting: Promise<void> = Promise.resolve();
+	ipcMain.handle("suonetar:layout-read", async (event) => {
+		if (!trusted(event.sender)) {
+			throw new ErrorIpcArgument("call from an unknown page");
+		}
+		try {
+			return await settingsLayoutRead(layoutFile);
+		} catch (err) {
+			log("reading the layout choice failed; showing changes inline", err);
+			return "inline";
+		}
+	});
+	ipcMain.on("suonetar:layout-save", (event, value: unknown) => {
+		const layout = LAYOUTS.find((l) => l === value);
+		if (!trusted(event.sender) || layout === undefined) {
+			log("refused to save a layout", value);
+			return;
+		}
+		layoutWriting = layoutWriting.then(() => settingsLayoutWrite(layoutFile, layout)).catch((err: unknown) => log("saving the layout choice failed", err));
 	});
 
 	app.on("window-all-closed", () => {
