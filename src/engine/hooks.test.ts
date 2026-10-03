@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { Oid } from "./git.ts";
 import { type HookChoice, Session } from "./session.ts";
 import { draftFile } from "./test-support/drafts.ts";
-import { type Fixture, lineSet, lines, repoFixture, shPath } from "./test-support/repo.ts";
+import { dirRemove, type Fixture, lineSet, lines, repoFixture, shPath } from "./test-support/repo.ts";
 import { TIMEOUT_SCALE } from "./test-support/timeout.ts";
 
 const RUN: HookChoice = { kind: "run", skip: [] };
@@ -342,6 +342,9 @@ exit $changed`);
 		hookInstall("exit 0");
 		await draftFile(session, c1, "a.txt", Buffer.from("edited again\n"));
 		expect((await apply()).kind).toBe("published");
+		// The files go now, within this test's own time: deleting them twice over (here and in the private worktree) takes the shared cleanup past its limit on Windows.
+		fx.git("read-tree", "-m", "-u", "HEAD", c1);
+		await dirRemove(join(fx.dir, ".git", "suonetar", "wt"));
 	});
 
 	test("a hook-created file that a later commit's change would drop is a collision, not a loss", async () => {
