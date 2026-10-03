@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -413,6 +413,81 @@ describe("restacking", () => {
 			other.close();
 			expect(existsSync(stale)).toBe(false);
 			expect(existsSync(elsewhere)).toBe(true);
+		});
+	});
+
+	// Every git process costs tens of milliseconds on Windows, so an operation reads the stack and the merge settings once, and again only after it moves the branch.
+	describe("reads per operation", () => {
+		const calls: string[][] = [];
+		const stackReads = (): number => calls.filter((a) => a[0] === "rev-list" && a.includes("--first-parent") && a.includes("--parents")).length;
+		const configReads = (): number => calls.filter((a) => a.includes("^(merge|diff)\\.")).length;
+		let c1: Oid;
+
+		beforeEach(async () => {
+			c1 = fx.commit("c1", { "a.txt": lineSet(lines("a"), 2, "c1") });
+			for (let i = 2; i <= 4; i++) {
+				fx.commit(`c${i}`, { "b.txt": lineSet(lines("b"), i * 2, `c${i}`) });
+			}
+			session.close();
+			session = await Session.openRepo(
+				{
+					...fx.repo,
+					run: (args, opts) => {
+						calls.push([...args]);
+						return fx.repo.run(args, opts);
+					},
+				},
+				undefined,
+			);
+			calls.length = 0;
+		});
+
+		test("a save reads each once", async () => {
+			await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "first")));
+			const doc = await session.commitDocument(c1);
+			const shown = doc.files.find((f) => f.path === "a.txt")?.draftOid;
+			calls.length = 0;
+			await session.draftSetFile(c1, doc.parentTree, "a.txt", shown ?? null, Buffer.from(lineSet(lines("a"), 2, "second")));
+			expect([stackReads(), configReads()]).toEqual([1, 1]);
+		});
+
+		test("showing a commit on a fresh session reads each once", async () => {
+			await session.commitDocument(c1);
+			expect([stackReads(), configReads()]).toEqual([1, 1]);
+		});
+
+		test("an Apply whose hooks undo every edit reads the stack and the settings again after the hooks", async () => {
+			mkdirSync(join(fx.dir, ".git", "hooks"), { recursive: true });
+			// A formatter stripping trailing spaces, which is all the edit adds.
+			writeFileSync(
+				join(fx.dir, ".git", "hooks", "pre-commit"),
+				`#!/bin/sh\nchanged=0\nfor f in $(git diff --cached --name-only --diff-filter=ACM); do\n  if grep -q ' $' "$f"; then sed -i 's/ *$//' "$f"; changed=1; fi\ndone\nexit $changed\n`,
+			);
+			chmodSync(join(fx.dir, ".git", "hooks", "pre-commit"), 0o755);
+			await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "c1  ")));
+			calls.length = 0;
+			expect((await session.apply({ kind: "run", skip: [] }, () => undefined)).kind).toBe("hook-reverted");
+			expect([stackReads(), configReads()]).toEqual([2, 2]);
+		});
+
+		test("an Apply reads the stack again after it moves the branch", async () => {
+			await draftFile(session, c1, "a.txt", Buffer.from(lineSet(lines("a"), 2, "applied")));
+			calls.length = 0;
+			await applied();
+			expect(stackReads()).toBe(2);
+		});
+
+		test("an operation that fails, or whose stack read fails, leaves the next to read afresh", async () => {
+			await expect(session.commitDocument("1".repeat(40))).rejects.toThrow();
+			const tip = fx.commit("c5", { "c.txt": "c\n" });
+			const state = await session.state();
+			expect(state.kind === "ready" ? state.stack.tipOid : state.kind).toBe(tip);
+			// A save while detached, which only a commit that already has a draft takes: its stack read fails, and that failure is not remembered past it.
+			await draftFile(session, c1, "a.txt", Buffer.from("attached\n"));
+			fx.git("switch", "-q", "--detach", "HEAD");
+			await draftFile(session, c1, "a.txt", Buffer.from("detached\n"));
+			fx.git("switch", "-q", "feature");
+			expect((await session.state()).kind).toBe("ready");
 		});
 	});
 });

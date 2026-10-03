@@ -223,6 +223,9 @@ type Derivation = {
 
 type Current = Extract<DraftStatus, { kind: "current" }>;
 
+// What an operation has read so far, as the reads in flight.
+type Reads = { stack?: Promise<Stack>; config?: Promise<string> };
+
 // Where an edit to a commit lands: the version of its files it changes, and the commit's own tree restacked onto that version's parent (`restacked` false when that conflicts, so the tree is only a stand-in).
 type EditTarget = { readonly commit: CommitBasics; readonly version: Version; readonly unedited: Oid; readonly restacked: boolean };
 
@@ -235,6 +238,8 @@ export class Session {
 	readonly #base: string | undefined;
 	readonly #cat: CatFile;
 	readonly #mutex: Mutex;
+	// What the running operation has read of the stack and the merge settings, kept for the rest of it: operations run one at a time, and each reads them once. Anything an operation does that moves the branch or runs the user's code (a publish, the hook pass) forgets them, so what follows reads them afresh.
+	#reads: Reads | undefined;
 	readonly #hookCache: HookCache = new Map();
 	// Merge results and conflict stand-ins by merge settings and inputs, for the repository and for `#view`: an edit changes only the commits above it, so most of a derivation repeats the last one.
 	readonly #merges = new Map<Repo, Map<string, MergeResult | Oid>>();
@@ -263,8 +268,46 @@ export class Session {
 		return new Session(repo, base);
 	}
 
+	// Runs an operation alone under the repository's mutex, with its reads of the stack and the merge settings remembered for its duration.
+	#op<T>(fn: () => Promise<T>): Promise<T> {
+		return this.#mutex.run(async () => {
+			if (this.#reads !== undefined) {
+				throw new Error("a session operation started while another was running");
+			}
+			this.#reads = {};
+			try {
+				return await fn();
+			} finally {
+				this.#reads = undefined;
+			}
+		});
+	}
+
+	#readsCurrent(): Reads {
+		if (this.#reads === undefined) {
+			throw new Error("the stack or the merge settings were read outside a session operation");
+		}
+		return this.#reads;
+	}
+
+	#readsForget(): void {
+		this.#readsCurrent();
+		this.#reads = {};
+	}
+
 	#stackRead(): Promise<Stack> {
-		return stackRead(this.repo, this.#cat, this.#base);
+		const reads = this.#readsCurrent();
+		reads.stack ??= stackRead(this.repo, this.#cat, this.#base);
+		return reads.stack;
+	}
+
+	// Moves the branch, so the operation's reads are forgotten whatever comes of it: a publish can be rolled back, or interrupted after the ref moved.
+	async #publish(branch: string, oldTip: Oid, newTip: Oid, message: string): Promise<PublishResult> {
+		try {
+			return await publish(this.repo, branch, oldTip, newTip, message);
+		} finally {
+			this.#readsForget();
+		}
 	}
 
 	close(): void {
@@ -275,7 +318,7 @@ export class Session {
 	// Closes once the operation in progress (and any queued behind it) has finished, including a merge tool, which runs outside the queue.
 	closeWhenIdle(): Promise<void> {
 		const tool = this.#tool;
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			try {
 				await tool;
 			} finally {
@@ -286,7 +329,7 @@ export class Session {
 
 	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, the configured base changes, or any branch moves (a push or fetch changes the base and what is pushed). Two processes, since the renderer polls it every second: one listing of HEAD, every branch and the store ref, and the base setting.
 	generation(): Promise<string> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const refs = await gitOk(this.repo, ["for-each-ref", "--include-root-refs", "--format=%(refname) %(objectname) %(symref)", "HEAD", "refs/heads", "refs/remotes", STORE_REF]);
 			// A HEAD on a branch with no commits yet is not listed; which branch it names then takes a process of its own.
 			const unborn =
@@ -297,7 +340,7 @@ export class Session {
 	}
 
 	state(): Promise<SessionState> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const pending = intentCheck(this.repo);
 			if (pending?.kind === "interrupted") {
 				return pending;
@@ -322,7 +365,7 @@ export class Session {
 
 	// The whole commit as the editor shows it, restacked onto the edits below: every file its change or its draft touches, with the three versions of each.
 	commitDocument(oid: Oid): Promise<CommitDocument> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const derivation = await this.#derivationShown();
 			const derived = derivedFor(derivation, oid);
 			const commit = derived.commit;
@@ -347,7 +390,7 @@ export class Session {
 
 	// The conflict restacking this commit runs into, for resolving it.
 	commitConflict(oid: Oid): Promise<ConflictReport> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const derivation = await this.#derivationShown();
 			const report = conflictReport(derivation, derivedFor(derivation, oid));
 			if (report === undefined) {
@@ -359,7 +402,7 @@ export class Session {
 
 	// A draft's own changes, relative to the commit it was made on; works for drafts whose commit is gone, so orphans can be looked at before discarding them.
 	draftDocument(against: Oid): Promise<CommitDocument> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const draft = (await storeRead(this.repo, this.#cat)).drafts.get(against);
 			if (draft === undefined) {
 				throw new ErrorStale(`the draft for ${against.slice(0, 12)}`);
@@ -384,11 +427,11 @@ export class Session {
 	}
 
 	blobAt(tree: Oid, path: string): Promise<Buffer | undefined> {
-		return this.#mutex.run(() => this.#blobAt(tree, path));
+		return this.#op(() => this.#blobAt(tree, path));
 	}
 
 	blob(oid: Oid): Promise<Buffer | undefined> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const obj = await this.#cat.read(oid);
 			return obj?.type === "blob" ? obj.data : undefined;
 		});
@@ -396,7 +439,7 @@ export class Session {
 
 	// Sets one file of a commit's draft (null deletes it), as edited in a document that showed the commit on `parentTree` with the file as blob `shown` (null: absent). Returns the blob now stored, or null for a deletion. The commit need not be in the current stack: an edit saved against a commit rewritten meanwhile is kept and later offered for confirmation onto its successor.
 	draftSetFile(oid: Oid, parentTree: Oid, path: string, shown: Oid | null, content: Buffer | null): Promise<Oid | null> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const derivation = await this.#derivationIfAny(oid);
 			const store = derivation?.store ?? (await storeRead(this.repo, this.#cat));
 			const existing = store.drafts.get(oid);
@@ -410,7 +453,7 @@ export class Session {
 
 	// Sets one file of a commit's draft back to its version in the commit (as restacked) or in the parent shown, mode and all; absent there means deleted.
 	draftRestore(oid: Oid, parentTree: Oid, path: string, from: "commit" | "parent"): Promise<void> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const derivation = await this.#derivationIfAny(oid);
 			const store = derivation?.store ?? (await storeRead(this.repo, this.#cat));
 			const existing = store.drafts.get(oid);
@@ -423,7 +466,7 @@ export class Session {
 	}
 
 	draftSetMessage(oid: Oid, message: Buffer | undefined): Promise<void> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const store = await storeRead(this.repo, this.#cat);
 			const existing = store.drafts.get(oid);
 			const branch = await this.#draftBranch(existing, "(message)");
@@ -437,13 +480,13 @@ export class Session {
 	}
 
 	draftDiscard(against: Oid): Promise<void> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			await this.#storeUpdate(await storeRead(this.repo, this.#cat), (drafts) => drafts.delete(against));
 		});
 	}
 
 	draftConfirm(against: Oid): Promise<void> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const stack = await this.#stackRead();
 			const store = await storeRead(this.repo, this.#cat);
 			const baseTree = (await commitRead(this.#cat, stack.baseOid)).tree;
@@ -463,7 +506,7 @@ export class Session {
 
 	// Moves a draft made on another branch onto the current one, where it is then matched like any other.
 	draftAdopt(against: Oid): Promise<void> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const store = await storeRead(this.repo, this.#cat);
 			const draft = store.drafts.get(against);
 			if (draft === undefined) {
@@ -476,7 +519,7 @@ export class Session {
 
 	// Records how one conflict (identified by its key) is resolved. Every path the conflict involves must be accounted for, and text must be free of conflict markers unless explicitly allowed. Once every conflict of the commit is resolved, the result becomes the commit's stored version, made on the parent it was resolved against.
 	resolve(inputs: MergeInputs, key: string, choices: readonly ResolutionChoice[]): Promise<ResolveResult> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const derivation = await this.#derivationConflicted(inputs);
 			const derived = derivation?.commits.find((d) => d.conflict !== undefined && inputsEqual(d.conflict.inputs, inputs));
 			const found = derived?.conflict;
@@ -551,7 +594,7 @@ export class Session {
 	}
 
 	preview(): Promise<PreviewResult> {
-		return this.#mutex.run(async () => (await this.#plan(await this.#derivationShown())).preview);
+		return this.#op(async () => (await this.#plan(await this.#derivationShown())).preview);
 	}
 
 	// Publishes every draft: the restacked stack, the pre-commit hook on each rewritten commit (unless skipped), then the locked publish.
@@ -560,7 +603,7 @@ export class Session {
 		const abort = new AbortController();
 		this.#abort = abort;
 		try {
-			return await this.#mutex.run(() => this.#apply(hooks, progress, abort.signal));
+			return await this.#op(() => this.#apply(hooks, progress, abort.signal));
 		} finally {
 			if (this.#abort === abort) {
 				this.#abort = undefined;
@@ -570,16 +613,16 @@ export class Session {
 
 	// The working tree's staged and unstaged change counts, cheap enough to poll.
 	worktreeStatus(): Promise<WorktreeStatus> {
-		return this.#mutex.run(() => worktreeStatus(this.repo, WORKTREE_FILES_MAX));
+		return this.#op(() => worktreeStatus(this.repo, WORKTREE_FILES_MAX));
 	}
 
 	worktreeDocument(side: WorktreeSide): Promise<WorktreeDocument> {
-		return this.#mutex.run(async () => ({ side, ...(await worktreeFiles(this.repo, this.#cat, side, WORKTREE_FILES_MAX, BLOB_LIMIT)) }));
+		return this.#op(async () => ({ side, ...(await worktreeFiles(this.repo, this.#cat, side, WORKTREE_FILES_MAX, BLOB_LIMIT)) }));
 	}
 
 	// A path's EditorConfig indentation as of `tree`, for editors that show something other than a document file (a conflict's marker file).
 	indentation(tree: Oid, path: string): Promise<Indentation> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const found = (await indentationFor(this.#view, this.#cat, tree, [path])).get(path);
 			if (found === undefined) {
 				throw new Error(`no indentation resolved for ${path}`);
@@ -589,7 +632,7 @@ export class Session {
 	}
 
 	mergetoolName(): Promise<string | undefined> {
-		return this.#mutex.run(() => mergetoolName(this.repo));
+		return this.#op(() => mergetoolName(this.repo));
 	}
 
 	// Opens one path of a content conflict in the user's merge tool, starting from `content` (the resolve view's current text). `stale` when the conflict no longer occurs. The tool may stay open for minutes, so it runs outside the mutex: it touches nothing but its own throwaway index and work tree, and object writes.
@@ -610,7 +653,7 @@ export class Session {
 		this.#abort = abort;
 		try {
 			// Merged into the repository's own objects: the tool runs in the user's environment, and may start an IDE that commits, which must not write into objects that go away.
-			const conflict = await this.#mutex.run(async () => {
+			const conflict = await this.#op(async () => {
 				const derived = (await this.#derivationConflicted(inputs))?.commits.find((d) => d.conflict !== undefined && inputsEqual(d.conflict.inputs, inputs));
 				return derived?.conflict?.conflicts.find((c) => c.key === key);
 			});
@@ -636,7 +679,7 @@ export class Session {
 
 	// Undoes the branch's last Suonetar move, which must still be the one from `old` to `newTip`, the user confirmed as `kind`.
 	undo(old: Oid, newTip: Oid, kind: "exact" | "edits"): Promise<UndoResult> {
-		return this.#mutex.run(async () => {
+		return this.#op(async () => {
 			const pending = intentCheck(this.repo);
 			if (pending) {
 				return pending;
@@ -650,7 +693,7 @@ export class Session {
 				return info?.kind === "unavailable" ? { kind: "unavailable", reason: info.reason } : { kind: "stale" };
 			}
 			if (info.kind === "exact") {
-				const published = await publish(this.repo, stack.branch, info.new, info.old, reflogMessage(info.verb, info.commits, info.new));
+				const published = await this.#publish(stack.branch, info.new, info.old, reflogMessage(info.verb, info.commits, info.new));
 				return published.kind === "published" ? { kind: "published", verb: info.verb } : published;
 			}
 			const drafts = await undoDrafts(this.repo, this.#cat, stack.branch, assessed.pairing);
@@ -773,7 +816,13 @@ export class Session {
 	}
 
 	// The settings that change how merges come out.
-	async #mergeConfig(): Promise<string> {
+	#mergeConfig(): Promise<string> {
+		const reads = this.#readsCurrent();
+		reads.config ??= this.#mergeConfigRead();
+		return reads.config;
+	}
+
+	async #mergeConfigRead(): Promise<string> {
 		const result = await this.repo.run(["config", "--get-regexp", "^(merge|diff)\\."], { cwd: this.repo.worktree });
 		if (result.code > 1) {
 			throw new Error(`git config --get-regexp failed: ${result.stderr}`);
@@ -830,7 +879,7 @@ export class Session {
 		progress({ step: "write" });
 		const { tip, rewritten } = await replayCommit(this.repo, plan.stack.baseOid, steps, await signingWanted(this.repo));
 		progress({ step: "publish" });
-		const published = await publish(this.repo, plan.stack.branch, plan.stack.tipOid, tip, reflogMessage("apply", rewritten.length, plan.stack.tipOid));
+		const published = await this.#publish(plan.stack.branch, plan.stack.tipOid, tip, reflogMessage("apply", rewritten.length, plan.stack.tipOid));
 		if (published.kind !== "published") {
 			return published;
 		}
@@ -901,6 +950,9 @@ export class Session {
 			}
 		} catch (err) {
 			return { kind: "hook-error", message: (err as Error).message };
+		} finally {
+			// The hooks are the user's code and run for a while; the branch or the settings may move meanwhile.
+			this.#readsForget();
 		}
 	}
 
