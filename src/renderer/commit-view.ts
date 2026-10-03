@@ -554,6 +554,10 @@ export class CommitView {
 	// Changes that replace editors run with the view inert and every pending save flushed, so no keystroke lands in an editor about to go away.
 	#rework(what: string, fn: () => Promise<void>): void {
 		void this.#host.op(what, async () => {
+			// Queued behind a switch away from this view, which destroyed it.
+			if (this.#destroyed) {
+				return;
+			}
 			this.root.inert = true;
 			try {
 				if (!(await this.#host.autosave.flush())) {
