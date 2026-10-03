@@ -273,6 +273,43 @@ describe("session drafts", () => {
 		expect(new Set([first, second, third, fourth]).size).toBe(4);
 	});
 
+	test("generation changes with HEAD and the base setting too, and costs two processes", async () => {
+		const seen = [await session.generation()];
+		fx.git("branch", "other", c1);
+		seen.push(await session.generation());
+		fx.git("switch", "-q", "other");
+		seen.push(await session.generation());
+		fx.git("switch", "-q", "--detach", "other");
+		seen.push(await session.generation());
+		fx.git("switch", "-q", "--orphan", "unborn-a");
+		seen.push(await session.generation());
+		fx.git("switch", "-q", "--orphan", "unborn-b");
+		seen.push(await session.generation());
+		fx.git("switch", "-q", "feature");
+		fx.git("config", "suonetar.base", "main");
+		seen.push(await session.generation());
+		expect(new Set(seen).size).toBe(seen.length);
+		// Polled every second, so what it costs matters, on Windows above all.
+		let calls = 0;
+		const counted = await Session.openRepo(
+			{
+				...fx.repo,
+				run: (args, opts) => {
+					calls++;
+					return fx.repo.run(args, opts);
+				},
+			},
+			undefined,
+		);
+		try {
+			calls = 0;
+			await counted.generation();
+			expect(calls).toBe(2);
+		} finally {
+			counted.close();
+		}
+	});
+
 	test("an edit saved against a commit rewritten meanwhile is kept and offered for confirmation", async () => {
 		fx.git("switch", "-q", "--detach", c1);
 		fx.git("commit", "-q", "--amend", "--no-edit", "--allow-empty");

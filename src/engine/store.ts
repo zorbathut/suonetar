@@ -66,7 +66,7 @@ async function readJson(cat: CatFile, oid: Oid): Promise<unknown> {
 	return JSON.parse((await cat.readType(oid, "blob")).toString("utf8"));
 }
 
-export async function storeRefOid(repo: Repo): Promise<Oid | undefined> {
+async function storeRefOid(repo: Repo): Promise<Oid | undefined> {
 	const result = await repo.run(["rev-parse", "--verify", "--quiet", STORE_REF], { cwd: repo.worktree });
 	if (result.code === 0) {
 		return result.stdout.toString("utf8").trim();

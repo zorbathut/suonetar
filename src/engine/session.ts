@@ -26,7 +26,7 @@ import { type MergetoolResult, mergetoolName, mergetoolRun } from "./mergetool.t
 import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff, treeList } from "./objects.ts";
 import { type ReplayStep, replayCommit, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, type StackCommit, stackRead } from "./stack.ts";
-import { type DraftEntry, type ResolutionChange, type ResolutionEntry, type Store, storeRead, storeRefOid, storeWrite } from "./store.ts";
+import { type DraftEntry, type ResolutionChange, type ResolutionEntry, STORE_REF, type Store, storeRead, storeWrite } from "./store.ts";
 import { reflogMessage, type UndoInfo, undoAssess, undoDrafts } from "./undo.ts";
 import { type WorktreeSide, type WorktreeStatus, worktreeFiles, worktreeStatus } from "./worktree-changes.ts";
 import { WorktreePrivate } from "./worktree-private.ts";
@@ -284,28 +284,15 @@ export class Session {
 		});
 	}
 
-	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, the configured base changes, or any branch moves (a push or fetch changes the base and what is pushed).
+	// Cheap enough to poll: changes when HEAD switches or moves, the draft store changes, the configured base changes, or any branch moves (a push or fetch changes the base and what is pushed). Two processes, since the renderer polls it every second: one listing of HEAD, every branch and the store ref, and the base setting.
 	generation(): Promise<string> {
 		return this.#mutex.run(async () => {
-			const symbolic = await this.repo.run(["symbolic-ref", "-q", "HEAD"], { cwd: this.repo.worktree });
-			if (symbolic.code > 1) {
-				throw new Error(`git symbolic-ref HEAD failed: ${symbolic.stderr}`);
-			}
-			const head = await this.repo.run(["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: this.repo.worktree });
-			if (head.code > 1) {
-				throw new Error(`git rev-parse HEAD failed: ${head.stderr}`);
-			}
-			const parts = [
-				symbolic.stdout.toString("utf8").trim(),
-				head.stdout.toString("utf8").trim(),
-				(await storeRefOid(this.repo)) ?? "",
-				(await configGet(this.repo, "suonetar.base")) ?? "",
-				// Every branch, local and remote: the base and the pushed marks follow them.
-				createHash("sha1")
-					.update(await gitOk(this.repo, ["for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/heads", "refs/remotes"]))
-					.digest("hex"),
-			];
-			return parts.join(" ");
+			const refs = await gitOk(this.repo, ["for-each-ref", "--include-root-refs", "--format=%(refname) %(objectname) %(symref)", "HEAD", "refs/heads", "refs/remotes", STORE_REF]);
+			// A HEAD on a branch with no commits yet is not listed; which branch it names then takes a process of its own.
+			const unborn =
+				refs.subarray(0, 5).toString("utf8") === "HEAD " ? "" : (await this.repo.run(["symbolic-ref", "-q", "HEAD"], { cwd: this.repo.worktree })).stdout.toString("utf8").trim();
+			const base = (await configGet(this.repo, "suonetar.base")) ?? "";
+			return `${createHash("sha1").update(refs).digest("hex")} ${unborn} ${base}`;
 		});
 	}
 
