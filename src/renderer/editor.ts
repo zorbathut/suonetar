@@ -43,6 +43,26 @@ function mergeControl(type: "reject" | "accept", action: (e: MouseEvent) => void
 	return node;
 }
 
+// Holds how an editor shows its diff, so that it can change without the editor being replaced.
+const diffCompartment = new Compartment();
+
+// The diff shown inline against `original`.
+export function editorDiffInline(original: string, editable: boolean): Extension {
+	return unifiedMergeView({
+		original: Text.of(original.split("\n")),
+		mergeControls: editable ? mergeControl : false,
+		collapseUnchanged: { margin: 3, minSize: 6 },
+		syntaxHighlightDeletions: true,
+		allowInlineDiffs: true,
+		// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
+		diffConfig: { override: diffByLine },
+	});
+}
+
+export function editorDiffSet(view: EditorView, diff: Extension): void {
+	view.dispatch({ effects: diffCompartment.reconfigure(diff) });
+}
+
 export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView {
 	const language = new Compartment();
 	const extensions: Extension[] = [
@@ -67,19 +87,7 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 		darkMode() ? oneDark : [],
 		spec.extensions,
 	];
-	if (spec.original !== undefined) {
-		extensions.push(
-			unifiedMergeView({
-				original: Text.of(spec.original.split("\n")),
-				mergeControls: spec.editable ? mergeControl : false,
-				collapseUnchanged: { margin: 3, minSize: 6 },
-				syntaxHighlightDeletions: true,
-				allowInlineDiffs: true,
-				// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
-				diffConfig: { override: diffByLine },
-			}),
-		);
-	}
+	extensions.push(diffCompartment.of(spec.original === undefined ? [] : editorDiffInline(spec.original, spec.editable)));
 	const onChange = spec.onChange;
 	if (onChange !== undefined) {
 		extensions.push(

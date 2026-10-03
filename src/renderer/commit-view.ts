@@ -205,7 +205,7 @@ export class CommitView {
 		this.#host.files.replaceChildren();
 		this.#observer.disconnect();
 		for (const s of this.#sections) {
-			s.editor?.destroy();
+			this.#editorDestroy(s);
 		}
 		this.root.remove();
 	}
@@ -430,8 +430,7 @@ export class CommitView {
 	// The section's header and the placeholder its editor is created into once it scrolls near the viewport; with `docText`, the editor is created right away with that text.
 	#bodyBuild(s: Section, docText: string | undefined): void {
 		const f = s.file;
-		s.editor?.destroy();
-		s.editor = undefined;
+		this.#editorDestroy(s);
 		s.body.replaceChildren();
 		s.body.style.minHeight = "";
 		this.#headerUpdate(s);
@@ -484,6 +483,11 @@ export class CommitView {
 		const onChange = codec === undefined ? undefined : this.#onChange(s, codec);
 		s.editor = editorCreate(s.body, { path: f.path, doc, original, editable: codec !== undefined, onChange, extensions: [], indentation: f.indentation });
 		this.#headerUpdate(s);
+	}
+
+	#editorDestroy(s: Section): void {
+		s.editor?.destroy();
+		s.editor = undefined;
 	}
 
 	#onChange(s: Section, codec: TextCodec): () => void {
