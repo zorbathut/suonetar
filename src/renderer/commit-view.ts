@@ -67,7 +67,7 @@ type Section = {
 	slot: HTMLElement | undefined;
 	// The editor's text is saved when edited.
 	writable: boolean;
-	// Built in a layout other than the view's, to be switched once it comes near the viewport.
+	// Built in a layout other than the view's, to be switched in idle time or once it comes near the viewport, whichever is first.
 	layoutStale: boolean;
 	// Says why the file is inline while the view is in three panes; only for files that have to be.
 	layoutNote: HTMLElement | undefined;
@@ -87,7 +87,11 @@ type Section = {
 type Place = { readonly section: Section; readonly pos: number; readonly offset: number };
 
 const LARGE_LINES = 5000;
-// Frames the reader's place is held for after a layout switch, while the switched sections lay out, fold and line up (each takes a frame or two, and the sections switched as they come near take their own).
+// The most text (each file's draft and parent) built in idle time; files past it are built as they come near.
+const IDLE_BUILD_BYTES = 2 * 1024 * 1024;
+// A file bigger than this (draft and parent) takes long enough to build that it waits until it comes near, rather than stall whatever the reader is doing when idle time builds it.
+const IDLE_FILE_BYTES = 256 * 1024;
+// Frames the reader's place is held for after a layout switch, while the switched sections lay out, fold and line up (each takes a frame or two, and the sections switched later take their own).
 const PLACE_HOLD_FRAMES = 30;
 const LOCKFILE =
 	/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|packages\.lock\.json)$/;
@@ -125,6 +129,9 @@ export class CommitView {
 	#destroyed = false;
 	#layout: Layout;
 	#placeFrame: number | undefined;
+	#idleHandle: number | undefined;
+	// Bytes of text the idle loop has built editors for.
+	#idleBuilt = 0;
 	#pointerDown = false;
 	readonly #pointerUp = () => {
 		this.#pointerDown = false;
@@ -159,6 +166,7 @@ export class CommitView {
 		});
 		window.addEventListener("pointerup", this.#pointerUp);
 		this.#highlightSchedule();
+		this.#idleStart();
 	}
 
 	static async create(host: CommitViewHost, source: CommitViewSource): Promise<CommitView> {
@@ -221,6 +229,9 @@ export class CommitView {
 		window.removeEventListener("pointerup", this.#pointerUp);
 		if (this.#highlightFrame !== undefined) {
 			cancelAnimationFrame(this.#highlightFrame);
+		}
+		if (this.#idleHandle !== undefined) {
+			cancelIdleCallback(this.#idleHandle);
 		}
 		this.#placeRelease();
 		// Emptied but left shown: the next commit view fills it, and hiding it in between would resize the stack pane under its own scrolling. Views without files hide it.
@@ -454,7 +465,7 @@ export class CommitView {
 		}
 	}
 
-	// The section's header and the placeholder its editor is created into once it scrolls near the viewport; with `docText`, the editor is created right away with that text.
+	// The section's header and the placeholder its editor is created into in idle time or once it scrolls near the viewport; with `docText`, the editor is created right away with that text.
 	#bodyBuild(s: Section, docText: string | undefined): void {
 		const f = s.file;
 		this.#editorDestroy(s);
@@ -603,7 +614,7 @@ export class CommitView {
 		this.#headerUpdate(s);
 	}
 
-	// Changes the layout in place: every built section is marked to switch, and observed afresh, so the observer reports those near the viewport at once (and switches them) and the rest as they come near. The reader's place is held while the switched sections settle.
+	// Changes the layout in place: every built section is marked to switch, and observed afresh, so the observer reports those near the viewport at once (and switches them) and the idle loop switches the rest. The reader's place is held while the switched sections settle.
 	layoutSet(layout: Layout): void {
 		if (this.#destroyed || layout === this.#layout) {
 			return;
@@ -618,6 +629,50 @@ export class CommitView {
 			}
 		}
 		this.#placeHold(place);
+		this.#idleStart();
+	}
+
+	// Builds the sections' editors, and switches built ones to the view's layout, one section per idle moment, outward from the reader's place, so that the page has its true height and far files are ready when reached. The working tree's view is rebuilt as it changes, and can be thousands of files, so it stays lazy.
+	#idleStart(): void {
+		if (this.#idleHandle !== undefined) {
+			cancelIdleCallback(this.#idleHandle);
+			this.#idleHandle = undefined;
+		}
+		if (this.#source.kind === "worktree") {
+			return;
+		}
+		// Ordered at the first step, after anything that scrolls the new view into place.
+		let order: Section[] | undefined;
+		let next = 0;
+		const step = (): void => {
+			this.#idleHandle = undefined;
+			if (this.#destroyed) {
+				return;
+			}
+			if (order === undefined) {
+				const current = this.#sectionCurrent();
+				order = this.#sections
+					.map((s, i) => ({ s, distance: Math.abs(i - current) }))
+					.sort((x, y) => x.distance - y.distance)
+					.map((x) => x.s);
+			}
+			for (let s = order[next++]; s !== undefined; s = order[next++]) {
+				if (s.layoutStale) {
+					this.#layoutApply(s);
+					break;
+				}
+				const size = (s.file.draft?.length ?? 0) + (s.file.parent?.length ?? 0);
+				if (s.editor === undefined && this.#editorPossible(s) && size <= IDLE_FILE_BYTES && this.#idleBuilt + size <= IDLE_BUILD_BYTES) {
+					this.#idleBuilt += size;
+					this.#editorBuild(s, undefined);
+					break;
+				}
+			}
+			if (next < order.length) {
+				this.#idleHandle = requestIdleCallback(step);
+			}
+		};
+		this.#idleHandle = requestIdleCallback(step);
 	}
 
 	// The line of the file at the top of the view, and how far below the view's top it is.
