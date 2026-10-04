@@ -8,6 +8,7 @@ import { Autosave } from "./autosave.ts";
 import { CommitView, type CommitViewHost } from "./commit-view.ts";
 import { ask, button, el } from "./dom.ts";
 import { type HookSkip, type HookStop, hookSummary, hookViewCreate, progressText } from "./hook-view.ts";
+import { Overview } from "./overview.ts";
 import type { CommitIdentity } from "./reselect.ts";
 import { type Report, ResolveView, type ResolveViewHost } from "./resolve-view.ts";
 import { branchShort, commitStatusFor, type DraftStatus, draftPendingFor, type Ready, stackRender, stackSummary, type Worktree } from "./stack-view.ts";
@@ -223,7 +224,17 @@ for (const input of layoutEl.querySelectorAll("input")) {
 	});
 }
 
-const commitHost: CommitViewHost = { autosave, scroller: docEl, op, reload: commitReload, files: filesEl, collapsed: new Set(), layout: () => layout };
+const overviewEl = byId("overview");
+const commitHost: CommitViewHost = {
+	autosave,
+	scroller: docEl,
+	op,
+	reload: commitReload,
+	files: filesEl,
+	collapsed: new Set(),
+	layout: () => layout,
+	overview: new Overview(overviewEl, docEl),
+};
 
 function stackRedraw(): void {
 	if (ready === undefined) {
@@ -281,6 +292,7 @@ function busySet(value: boolean): void {
 	document.body.classList.toggle("busy", value);
 	sideEl.inert = value;
 	docEl.inert = value;
+	overviewEl.inert = value;
 	layoutEl.inert = value;
 	if (applyEl instanceof HTMLButtonElement) {
 		applyEl.disabled = value;

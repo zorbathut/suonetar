@@ -6,7 +6,19 @@ import type { Layout, Wire } from "../shared/api.ts";
 import { diffByLine } from "./diff.ts";
 import { el } from "./dom.ts";
 import { editorCreate, editorDiffSet, REVERT_CHUNK_TITLE } from "./editor.ts";
-import { chunkLines, type LinesPair, panesFolds, panesFoldsKeep, panesLineToRight, panesRegions, panesRevert, panesStops, type RegionThree } from "./panes-regions.ts";
+import { changeKind, type OverviewChange } from "./overview.ts";
+import {
+	chunkLines,
+	type LinesPair,
+	panesChanges,
+	panesFolds,
+	panesFoldsKeep,
+	panesLineToRight,
+	panesRegions,
+	panesRevert,
+	panesStops,
+	type RegionThree,
+} from "./panes-regions.ts";
 
 // The spacer, fold and chunk machinery here follows MergeView in @codemirror/merge (MIT, Marijn Haverbeke and others), widened to three editors.
 
@@ -392,6 +404,29 @@ export class Panes {
 	stops(): number[] {
 		const doc = this.#right.state.doc;
 		return panesStops(this.#regionsNow()).map((line) => lineStart(doc, line));
+	}
+
+	// Each changed region where the right pane differs from the left: its extent in viewport pixels, and the right pane's position where it starts. The panes are level where every unchanged region starts, so a region runs from its top in any pane to the next unchanged region's top in the tallest (the others pad up to it there with spacers, inside that line's block).
+	changes(): OverviewChange[] {
+		const at = (p: Pane, r: RegionThree | undefined): number => {
+			const view = p.view;
+			const doc = view.state.doc;
+			return view.documentTop + (r === undefined ? view.lineBlockAt(doc.length).bottom : view.lineBlockAt(lineStart(doc, regionLines(r, p.doc)[0])).top);
+		};
+		return panesChanges(this.#regionsNow()).flatMap(({ region, next }) => {
+			const kind = changeKind(region.a0 === region.a1, region.c0 === region.c1);
+			if (kind === undefined) {
+				return [];
+			}
+			return [
+				{
+					top: Math.min(...this.#panes.map((p) => at(p, region))),
+					bottom: Math.max(...this.#panes.map((p) => at(p, next))),
+					pos: lineStart(this.#right.state.doc, region.c0),
+					kind,
+				},
+			];
+		});
 	}
 
 	// The focused pane's cursor, as the position beside it in the right pane; undefined when no pane has focus.

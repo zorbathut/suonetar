@@ -1,15 +1,26 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, indentOnInput, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { unifiedMergeView } from "@codemirror/merge";
+import { Chunk, getChunks, unifiedMergeView } from "@codemirror/merge";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, type Extension, Text } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, StateField, Text } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
+import {
+	BlockType,
+	drawSelection,
+	EditorView,
+	highlightActiveLine,
+	highlightActiveLineGutter,
+	highlightSpecialChars,
+	keymap,
+	lineNumbers,
+	rectangularSelection,
+} from "@codemirror/view";
 import type { Indentation } from "../engine/editorconfig.ts";
 import type { Wire } from "../shared/api.ts";
 import { diffByLine } from "./diff.ts";
 import { editorIndentExtension } from "./indentation.ts";
+import { changeKind, type OverviewChange } from "./overview.ts";
 import { wrapIndented } from "./wrap-indent.ts";
 
 export type EditorSpec = {
@@ -58,6 +69,43 @@ export function editorDiffInline(original: string, editable: boolean): Extension
 		allowInlineDiffs: true,
 		// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
 		diffConfig: { override: diffByLine },
+	});
+}
+
+// The viewport extent of lines [fromB, toB) of the editor's text; with none, of the deleted lines shown above `fromB`, which share its line block. A chunk's `toB` is one past the end of the text when it runs to the end.
+export function editorSpan(view: EditorView, fromB: number, toB: number): { readonly top: number; readonly bottom: number } {
+	const doc = view.state.doc;
+	const block = view.lineBlockAt(Math.min(fromB, doc.length));
+	const top = view.documentTop + block.top;
+	if (toB > fromB) {
+		return { top, bottom: view.documentTop + view.lineBlockAt(Math.min(toB - 1, doc.length)).bottom };
+	}
+	let above = 0;
+	if (Array.isArray(block.type)) {
+		for (const part of block.type) {
+			if (part.type === BlockType.Text) {
+				break;
+			}
+			above += part.height;
+		}
+	}
+	return { top, bottom: top + above };
+}
+
+// The changes the inline diff shows; none without one.
+export function editorDiffChanges(view: EditorView): OverviewChange[] {
+	return (getChunks(view.state)?.chunks ?? []).flatMap((c) => {
+		const kind = changeKind(c.fromA === c.toA, c.fromB === c.toB);
+		return kind === undefined ? [] : [{ ...editorSpan(view, c.fromB, c.toB), pos: c.fromB, kind }];
+	});
+}
+
+// The editor text's chunks against `against`, kept current as it is typed in.
+export function editorChunksField(against: Text): StateField<readonly Chunk[]> {
+	const conf = { override: diffByLine };
+	return StateField.define<readonly Chunk[]>({
+		create: (state) => Chunk.build(against, state.doc, conf),
+		update: (chunks, tr) => (tr.docChanged ? Chunk.updateB(chunks, against, tr.newDoc, tr.changes, conf) : chunks),
 	});
 }
 

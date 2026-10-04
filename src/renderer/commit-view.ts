@@ -1,4 +1,5 @@
-import { getChunks } from "@codemirror/merge";
+import { type Chunk, getChunks } from "@codemirror/merge";
+import { type StateField, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { CommitDocument, DocumentFile } from "../engine/session.ts";
 import type { WorktreeSide } from "../engine/worktree-changes.ts";
@@ -7,10 +8,11 @@ import { api, call, errorText } from "./api.ts";
 import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
-import { editorCreate, editorDiffInline, editorDiffSet } from "./editor.ts";
-import { statusClass, statusLabel } from "./file-status.ts";
+import { editorChunksField, editorCreate, editorDiffChanges, editorDiffInline, editorDiffSet, editorSpan } from "./editor.ts";
+import { statusChange, statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
+import type { Overview, OverviewKind, OverviewMark } from "./overview.ts";
 import { Panes, type PanesKind, type PanesSpec, panesKindFor } from "./panes.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 import { worktreeLabel } from "./stack-view.ts";
@@ -49,7 +51,12 @@ export type CommitViewHost = {
 	readonly collapsed: Set<string>;
 	// The layout a new view starts in.
 	readonly layout: () => Layout;
+	// The strip beside the scrollbar the view marks its changes on while it exists.
+	readonly overview: Overview;
 };
+
+// Where an overview tick jumps to: a position in the section's editor, or, for a tick over the whole file, its first change in the tick's lane.
+type OverviewTarget = { readonly section: Section; readonly pos: number | undefined; readonly lane: "diff" | "edit" };
 
 type Section = {
 	readonly file: File;
@@ -63,6 +70,8 @@ type Section = {
 	// The editor holding the file's text, which saves go from; in panes, the right one.
 	editor: EditorView | undefined;
 	panes: Panes | undefined;
+	// The editor's chunks against the commit's own version, which the overview marks as the user's edits; only in a commit's view, where that version is known.
+	editsField: StateField<readonly Chunk[]> | undefined;
 	// Where the editor, or the panes holding it, sit in the section's body.
 	slot: HTMLElement | undefined;
 	// The editor's text is saved when edited.
@@ -167,6 +176,7 @@ export class CommitView {
 		window.addEventListener("pointerup", this.#pointerUp);
 		this.#highlightSchedule();
 		this.#idleStart();
+		host.overview.show(this.root, { marks: () => this.#overviewMarks(), jump: (t) => this.#overviewJump(t), title: (t) => t.section.file.path });
 	}
 
 	static async create(host: CommitViewHost, source: CommitViewSource): Promise<CommitView> {
@@ -233,6 +243,7 @@ export class CommitView {
 		if (this.#idleHandle !== undefined) {
 			cancelIdleCallback(this.#idleHandle);
 		}
+		this.#host.overview.hide(this.root);
 		this.#placeRelease();
 		// Emptied but left shown: the next commit view fills it, and hiding it in between would resize the stack pane under its own scrolling. Views without files hide it.
 		this.#host.files.replaceChildren();
@@ -426,6 +437,7 @@ export class CommitView {
 			opaque,
 			editor: undefined,
 			panes: undefined,
+			editsField: undefined,
 			slot: undefined,
 			writable: false,
 			layoutStale: false,
@@ -484,6 +496,7 @@ export class CommitView {
 		} else {
 			s.body.style.minHeight = "80px";
 		}
+		this.#host.overview.changed();
 	}
 
 	#commitText(s: Section): string {
@@ -530,13 +543,22 @@ export class CommitView {
 		const panes = this.#panesWanted(s);
 		s.slot = el("div", {});
 		s.body.append(s.slot);
+		s.editsField = this.#source.kind === "commit" && !f.mineUnknown ? editorChunksField(Text.of(this.#commitText(s).split("\n"))) : undefined;
 		s.editor = editorCreate(s.slot, {
 			path: f.path,
 			doc,
 			original: panes === undefined ? original : undefined,
 			editable: s.writable,
 			onChange,
-			extensions: [],
+			// Outside the diff, which layouts replace.
+			extensions: [
+				s.editsField ?? [],
+				EditorView.updateListener.of((u) => {
+					if (u.docChanged) {
+						this.#host.overview.changed();
+					}
+				}),
+			],
 			indentation: f.indentation,
 		});
 		if (panes !== undefined) {
@@ -545,11 +567,13 @@ export class CommitView {
 		}
 		this.#layoutNoteUpdate(s);
 		this.#headerUpdate(s);
+		this.#host.overview.changed();
 	}
 
 	#editorDestroy(s: Section): void {
 		s.panes?.destroy();
 		s.panes = undefined;
+		s.editsField = undefined;
 		s.editor?.destroy();
 		s.editor = undefined;
 		s.slot = undefined;
@@ -612,6 +636,7 @@ export class CommitView {
 		}
 		this.#layoutNoteUpdate(s);
 		this.#headerUpdate(s);
+		this.#host.overview.changed();
 	}
 
 	// Changes the layout in place: every built section is marked to switch, and observed afresh, so the observer reports those near the viewport at once (and switches them) and the idle loop switches the rest. The reader's place is held while the switched sections settle.
@@ -845,6 +870,55 @@ export class CommitView {
 		if (target !== undefined) {
 			this.#sectionShow(target, true);
 		}
+	}
+
+	// Every section's changes and the user's edits, in content pixels. A section without an editor is marked whole.
+	#overviewMarks(): OverviewMark<OverviewTarget>[] {
+		const scroller = this.#host.scroller;
+		const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+		const marks: OverviewMark<OverviewTarget>[] = [];
+		const mark = (section: Section, span: { readonly top: number; readonly bottom: number }, kind: OverviewKind, pos: number | undefined): void => {
+			marks.push({ top: span.top - origin, bottom: span.bottom - origin, kind, target: { section, pos, lane: kind === "edit" ? "edit" : "diff" } });
+		};
+		for (const section of this.#sections) {
+			const view = section.editor;
+			if (view === undefined) {
+				const rect = section.body.getBoundingClientRect();
+				const kind = statusChange(section.file.status);
+				if (kind !== undefined) {
+					mark(section, rect, kind, undefined);
+				}
+				// Only a commit's own view tells the user's edits apart.
+				if (this.#source.kind === "commit" && section.edited) {
+					mark(section, rect, "edit", undefined);
+				}
+				continue;
+			}
+			for (const c of section.panes?.changes() ?? editorDiffChanges(view)) {
+				mark(section, c, c.kind, c.pos);
+			}
+			for (const c of section.editsField === undefined ? [] : view.state.field(section.editsField)) {
+				mark(section, editorSpan(view, c.fromB, c.toB), "edit", c.fromB);
+			}
+		}
+		return marks;
+	}
+
+	// Goes to a tick's change as F7 does, so that F7 carries on from there; a whole-file tick goes to the file's first change, or first edit.
+	#overviewJump(target: OverviewTarget): void {
+		if (this.#destroyed || this.root.inert) {
+			return;
+		}
+		const s = target.section;
+		this.#sectionReady(s);
+		const view = s.editor;
+		const edits = s.editsField === undefined ? [] : (view?.state.field(s.editsField) ?? []);
+		const pos = target.pos ?? (target.lane === "edit" ? edits[0]?.fromB : this.#stops(s)[0]);
+		if (view === undefined || pos === undefined) {
+			this.#sectionShow(s, false);
+			return;
+		}
+		this.#editorGo(view, pos);
 	}
 
 	// Builds the section's editor if it has none, and switches it to the view's layout.

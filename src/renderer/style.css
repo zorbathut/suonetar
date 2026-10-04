@@ -20,6 +20,9 @@
 	--pane-added-text: #22bb22aa;
 	--pane-mine-text: rgba(130, 80, 223, 0.18);
 	--pane-fold-bg: #f3f3f3;
+	--overview-added: #2da44e;
+	--overview-removed: #cf222e;
+	--overview-modified: #0969da;
 	color-scheme: light;
 }
 
@@ -44,6 +47,9 @@
 		--pane-added-text: #88ff88aa;
 		--pane-mine-text: rgba(163, 113, 247, 0.24);
 		--pane-fold-bg: #222222;
+		--overview-added: #3fb950;
+		--overview-removed: #f85149;
+		--overview-modified: #58a6ff;
 		color-scheme: dark;
 	}
 }
@@ -140,6 +146,7 @@ body.busy #top::after {
 }
 
 #body {
+	position: relative;
 	flex: 1;
 	display: flex;
 	min-height: 0;
@@ -216,6 +223,41 @@ body.busy #body {
 	flex: 1;
 	overflow-y: auto;
 	min-width: 0;
+}
+
+/* Ticks for the document's changes, just left of #doc's scrollbar (its `right` is set to the scrollbar's width), within the views' 16px right padding; the diff in a wide lane, the user's edits in a narrow one. The wheel passes through to #doc between ticks; over one, the strip forwards it. */
+#overview {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	pointer-events: none;
+}
+
+.overview-tick {
+	position: absolute;
+	left: 0;
+	width: 7px;
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+.overview-added {
+	background: var(--overview-added);
+}
+
+.overview-removed {
+	background: var(--overview-removed);
+}
+
+.overview-modified {
+	background: var(--overview-modified);
+}
+
+.overview-edit {
+	left: 8px;
+	width: 4px;
+	background: var(--draft);
 }
 
 /* Uncommitted changes: not commits, so set apart from them. */

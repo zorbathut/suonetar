@@ -2,7 +2,18 @@ import { Chunk } from "@codemirror/merge";
 import { ChangeSet, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { diffByLine } from "./diff.ts";
-import { chunkLines, type LinesPair, panesFolds, panesFoldsKeep, panesLineToRight, panesRegions, panesRevert, panesStops, type RegionThree } from "./panes-regions.ts";
+import {
+	chunkLines,
+	type LinesPair,
+	panesChanges,
+	panesFolds,
+	panesFoldsKeep,
+	panesLineToRight,
+	panesRegions,
+	panesRevert,
+	panesStops,
+	type RegionThree,
+} from "./panes-regions.ts";
 
 const CONF = { override: diffByLine };
 
@@ -238,6 +249,30 @@ describe("panesStops", () => {
 	it("lists the changed regions' first lines in the right pane", () => {
 		expect(panesStops(check("a\nb\nc\nd\ne\n", "a\nB\nc\nd\ne\n", "a\nB\nc\nd\nE\n"))).toEqual([1, 4]);
 		expect(panesStops(check("a\n", "a\n", "a\n"))).toEqual([]);
+	});
+});
+
+describe("panesChanges", () => {
+	it("lists the changed regions, each with the unchanged region after it", () => {
+		// Three panes: the commit changes b, the edit removes d and adds x after h.
+		const three = panesChanges(check("a\nb\nc\nd\ne\nf\ng\nh\n", "a\nB\nc\nd\ne\nf\ng\nh\n", "a\nB\nc\ne\nf\ng\nh\nx\n"));
+		expect(three.map((c) => [c.region.a0, c.region.a1, c.region.c0, c.region.c1, c.next?.c0])).toEqual([
+			[1, 2, 1, 2, 2],
+			[3, 4, 3, 3, 3],
+			[8, 8, 7, 8, 8],
+		]);
+		// Two panes, with a change running to the end of the file.
+		const left = "a\nb\nc\nd\ne\nf\n";
+		const two = panesChanges(check(left, left, "a\nc\nd\ne\nf"));
+		expect(two.map((c) => [c.region.c0, c.region.c1, c.next === undefined])).toEqual([
+			[1, 1, false],
+			[4, 5, true],
+		]);
+	});
+
+	it("keeps a region where the edit takes out lines the commit added, empty in both outer panes", () => {
+		const [region] = panesChanges(check("a\nc\nd\n", "a\nb\nc\nd\n", "a\nc\nd\n")).map((c) => c.region);
+		expect(region === undefined ? undefined : [region.a0 === region.a1, region.c0 === region.c1]).toEqual([true, true]);
 	});
 });
 

@@ -84,6 +84,11 @@ export function panesStops(regions: readonly RegionThree[]): number[] {
 	return regions.filter((r) => r.ab || r.bc).map((r) => r.c0);
 }
 
+// The changed regions, each with the unchanged region after it, where the panes are level again (undefined at the end).
+export function panesChanges(regions: readonly RegionThree[]): { readonly region: RegionThree; readonly next: RegionThree | undefined }[] {
+	return regions.flatMap((region, i) => (region.ab || region.bc ? [{ region, next: regions[i + 1] }] : []));
+}
+
 // The lines of an unchanged region that may fold: all but `margin` lines next to each change, with none kept at the file's start or end.
 function foldable(r: RegionThree, end: number, margin: number): { readonly from: number; readonly to: number } {
 	return { from: r.b0 + (r.b0 === 0 ? 0 : margin), to: r.b1 - (r.b1 === end ? 0 : margin) };
