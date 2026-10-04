@@ -448,10 +448,8 @@ export class CommitView {
 				continue;
 			}
 			const section = this.#sections.find((s) => s.body === entry.target);
-			if (section !== undefined && section.editor === undefined) {
-				this.#editorBuild(section, undefined);
-			} else if (section?.layoutStale) {
-				this.#layoutApply(section);
+			if (section !== undefined) {
+				this.#sectionReady(section);
 			}
 		}
 	}
@@ -794,6 +792,26 @@ export class CommitView {
 		}
 	}
 
+	// Builds the section's editor if it has none, and switches it to the view's layout.
+	#sectionReady(s: Section): void {
+		this.#editorBuild(s, undefined);
+		if (s.layoutStale) {
+			this.#layoutApply(s);
+		}
+	}
+
+	// The positions in the section's editor where each change starts.
+	#stops(s: Section): readonly number[] {
+		const view = s.editor;
+		return view === undefined ? [] : (s.panes?.stops() ?? getChunks(view.state)?.chunks.map((c) => c.fromB) ?? []);
+	}
+
+	#editorGo(view: EditorView, pos: number): void {
+		const anchor = Math.min(pos, view.state.doc.length);
+		view.focus();
+		view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
+	}
+
 	// Next or previous changed chunk across the whole document, continuing into the following sections.
 	chunkGo(dir: 1 | -1): void {
 		const start = this.#sectionCurrent();
@@ -804,20 +822,16 @@ export class CommitView {
 			if (s === undefined) {
 				continue;
 			}
-			this.#editorBuild(s, undefined);
-			if (s.layoutStale) {
-				this.#layoutApply(s);
-			}
+			this.#sectionReady(s);
 			const view = s.editor;
-			const stops = view === undefined ? undefined : (s.panes?.stops() ?? getChunks(view.state)?.chunks.map((c) => c.fromB));
-			if (view === undefined || stops === undefined || stops.length === 0) {
+			const stops = this.#stops(s);
+			if (view === undefined || stops.length === 0) {
 				continue;
 			}
 			const head = i === start && fromCursor ? (s.panes?.head() ?? view.state.selection.main.head) : dir > 0 ? -1 : view.state.doc.length + 1;
 			const target = dir > 0 ? stops.find((p) => p > head) : stops.findLast((p) => p < head);
 			if (target !== undefined) {
-				view.focus();
-				view.dispatch({ selection: { anchor: target }, effects: EditorView.scrollIntoView(target, { y: "center" }) });
+				this.#editorGo(view, target);
 				return;
 			}
 		}
