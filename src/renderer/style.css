@@ -586,6 +586,23 @@ section.record {
 	align-self: center;
 }
 
+/* A conflicted file's bar wraps rather than run into the overview strip, and gives its status a row of its own, under the buttons. */
+.resolve-view .section-header {
+	flex-wrap: wrap;
+}
+
+.section-header .record-status {
+	flex-basis: 100%;
+}
+
+.section-header .record-status:empty {
+	display: none;
+}
+
+.record-status-note {
+	color: var(--fg-dim);
+}
+
 .record-resolved {
 	color: var(--ok);
 }

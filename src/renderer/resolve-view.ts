@@ -104,6 +104,12 @@ const blocksField = StateField.define<DecorationSet>({
 	provide: (field) => EditorView.decorations.from(field),
 });
 
+// Shows a record's status: a note on what was done and what to do next, or (in the error colour) why something could not be done.
+function statusSet(status: HTMLElement, kind: "note" | "error", ...content: (Node | string)[]): void {
+	status.classList.toggle("record-status-note", kind === "note");
+	status.replaceChildren(...content);
+}
+
 function stageLabel(stage: 1 | 2 | 3): string {
 	switch (stage) {
 		case 1:
@@ -294,12 +300,12 @@ export class ResolveView {
 				for (const [key, chosen] of [[record.key, choices] as const, ...followers.map((f) => [f.record.key, f.choices] as const)]) {
 					const result = await call(api.resolve(inputs, key, chosen));
 					if (result.kind === "invalid") {
-						status.textContent = result.reason;
+						statusSet(status, "error", result.reason);
 						return;
 					}
 				}
 			} catch (err) {
-				status.textContent = errorText(err);
+				statusSet(status, "error", errorText(err));
 				throw err;
 			}
 			for (const row of this.#rows) {
@@ -313,8 +319,24 @@ export class ResolveView {
 
 	async #rowContent(record: Record): Promise<Row> {
 		const root = el("section", { class: "record" }, this.#rowHeader(record));
-		const status = el("div", { class: "record-status" });
 		const editors: { path: string; view: EditorView; codec: TextCodec; initial: string; edits: StateField<readonly Chunk[]> }[] = [];
+		// Saves every path of the record, from whichever path's bar it was asked for, reporting there.
+		const save = (status: HTMLElement): void => {
+			const withMarkers = editors.filter((e) => conflictBlocks(e.view.state.doc.toString()).length > 0);
+			const choicesFor = (markersAllowed: boolean): Choice[] => editors.map((e) => ({ path: e.path, content: textEncode(e.view.state.doc.toString(), e.codec), markersAllowed }));
+			if (withMarkers.length === 0) {
+				this.#save(record, choicesFor(false), [], status);
+				return;
+			}
+			void ask("Conflict markers remain", `${withMarkers.map((e) => e.path).join(", ")} still contains conflict blocks. Save it with the markers in the file?`, [
+				{ label: "Save with markers", value: "save" },
+				{ label: "Keep editing", value: "cancel", primary: true },
+			]).then((answer) => {
+				if (answer === "save") {
+					this.#save(record, choicesFor(true), [], status);
+				}
+			});
+		};
 		for (const path of record.paths) {
 			const bytes = await call(api.blobAt(this.#report.markerTree, path));
 			const decoded = bytes === undefined ? undefined : textDecode(bytes);
@@ -328,6 +350,8 @@ export class ResolveView {
 			const initial = conflictRelabelMarkers(decoded.text, this.#labels);
 			const holder = el("div", { class: "section-body" });
 			const counter = el("span", { class: "record-count" });
+			// Under the bar's buttons, so that a message never moves them; it travels with the bar as the file scrolls.
+			const status = el("div", { class: "record-status" });
 			const header = el("div", { class: "section-header" }, el("span", { class: "path", text: path }), counter);
 			root.append(header, holder);
 			const update = () => {
@@ -346,7 +370,7 @@ export class ResolveView {
 				actions.append(
 					button("Combine both changes", () => {
 						view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: combined }, userEvent: "input.combine" });
-						status.textContent = `${path}: both changes made together, as the two sides only touch. Check it, then Save resolution.`;
+						statusSet(status, "note", `${path}: both changes made together, as the two sides only touch. Check it, then Save resolution.`);
 					}),
 				);
 			}
@@ -354,37 +378,11 @@ export class ResolveView {
 			if (tool !== undefined) {
 				actions.append(button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)));
 			}
-			header.append(actions);
+			// Every path's bar saves the whole record, so a record of several files says so.
+			actions.append(button(record.paths.length === 1 ? "Save resolution" : `Save resolution (all ${record.paths.length} files)`, () => save(status), "primary"));
+			header.append(actions, status);
 			editors.push({ path, view, codec: decoded.codec, initial, edits });
 		}
-		root.append(
-			el(
-				"div",
-				{ class: "record-actions" },
-				button(
-					"Save resolution",
-					() => {
-						const withMarkers = editors.filter((e) => conflictBlocks(e.view.state.doc.toString()).length > 0);
-						const choicesFor = (markersAllowed: boolean): Choice[] =>
-							editors.map((e) => ({ path: e.path, content: textEncode(e.view.state.doc.toString(), e.codec), markersAllowed }));
-						if (withMarkers.length === 0) {
-							this.#save(record, choicesFor(false), [], status);
-							return;
-						}
-						void ask("Conflict markers remain", `${withMarkers.map((e) => e.path).join(", ")} still contains conflict blocks. Save it with the markers in the file?`, [
-							{ label: "Save with markers", value: "save" },
-							{ label: "Keep editing", value: "cancel", primary: true },
-						]).then((answer) => {
-							if (answer === "save") {
-								this.#save(record, choicesFor(true), [], status);
-							}
-						});
-					},
-					"primary",
-				),
-				status,
-			),
-		);
 		return {
 			record,
 			root,
@@ -446,33 +444,35 @@ export class ResolveView {
 						// Loading it into the editor would change its bytes, and dropping it would lose the merge: it can be stored exactly as the tool wrote it.
 						const why = decoded.kind === "binary" ? "is not text" : decoded.reason;
 						if (record.paths.length !== 1) {
-							status.textContent = `${tool}'s result for ${path} ${why}, so it cannot be shown here; resolve it in the editor instead.`;
+							statusSet(status, "error", `${tool}'s result for ${path} ${why}, so it cannot be shown here; resolve it in the editor instead.`);
 							return;
 						}
 						const content = result.content;
-						status.replaceChildren(
+						statusSet(
+							status,
+							"note",
 							`${tool}'s result for ${path} ${why}, so it cannot be shown here. `,
 							button("Save the tool's result as is", () => this.#save(record, [{ path, content, markersAllowed: true }], [], status)),
 						);
 						return;
 					}
 					view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: decoded.text }, userEvent: "input.mergetool" });
-					status.textContent = `${path} merged in ${tool}. Check it, then Save resolution.`;
+					statusSet(status, "note", `${path} merged in ${tool}. Check it, then Save resolution.`);
 					return;
 				}
 				case "unresolved": {
 					const tail = result.output.trim().split("\n").slice(-3).join(" ");
-					status.textContent = `${tool} did not resolve ${path}${tail === "" ? "." : `: ${tail}`}`;
+					statusSet(status, "error", `${tool} did not resolve ${path}${tail === "" ? "." : `: ${tail}`}`);
 					return;
 				}
 				case "cancelled":
-					status.textContent = `Stopped waiting for ${tool}; anything it saves now is ignored.`;
+					statusSet(status, "note", `Stopped waiting for ${tool}; anything it saves now is ignored.`);
 					return;
 				case "unconfigured":
-					status.textContent = "No merge tool is configured (git config merge.tool).";
+					statusSet(status, "error", "No merge tool is configured (git config merge.tool).");
 					return;
 				case "stale":
-					status.textContent = "That conflict no longer occurs; apply again to see the current state.";
+					statusSet(status, "error", "That conflict no longer occurs; apply again to see the current state.");
 					return;
 				default: {
 					const never: never = result;
@@ -552,7 +552,7 @@ export class ResolveView {
 					() => {
 						const missing = record.paths.filter((p) => !chosen.has(p));
 						if (missing.length > 0) {
-							status.textContent = `Choose what happens to ${missing.map((p) => this.#relabel(p)).join(", ")}.`;
+							statusSet(status, "error", `Choose what happens to ${missing.map((p) => this.#relabel(p)).join(", ")}.`);
 							return;
 						}
 						this.#save(record, [...chosen.values()], [], status);
