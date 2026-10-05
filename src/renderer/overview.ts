@@ -3,13 +3,13 @@ import { el } from "./dom.ts";
 // What the edited text has in a change against the text it is diffed against: lines that text lacks, none of its lines, or lines of its own.
 export type ChangeKind = "added" | "removed" | "modified";
 
-// A tick's kind: a change to the shown diff, or (`edit`) the user's own edit, which has a lane of its own.
-export type OverviewKind = ChangeKind | "edit";
+// A tick's kind: a change to the shown diff, a conflict still to resolve, or (`edit`) the user's own edit, which has a lane of its own.
+export type OverviewKind = ChangeKind | "conflict" | "edit";
 
 // A change in an editor, in viewport pixels, and the editor position it starts at.
 export type OverviewChange = { readonly top: number; readonly bottom: number; readonly pos: number; readonly kind: ChangeKind };
 
-// A change in viewport pixels, as an editor or an element reports its place.
+// A change or a conflict, in viewport pixels, as an editor or an element reports its place.
 export type OverviewMark<T> = { readonly top: number; readonly bottom: number; readonly kind: OverviewKind; readonly target: T };
 
 export type OverviewTick<T> = { readonly y: number; readonly height: number; readonly kind: OverviewKind; readonly target: T };

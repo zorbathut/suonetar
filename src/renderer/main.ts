@@ -225,6 +225,7 @@ for (const input of layoutEl.querySelectorAll("input")) {
 }
 
 const overviewEl = byId("overview");
+const overview = new Overview(overviewEl, docEl);
 const commitHost: CommitViewHost = {
 	autosave,
 	scroller: docEl,
@@ -233,7 +234,7 @@ const commitHost: CommitViewHost = {
 	files: filesEl,
 	collapsed: new Set(),
 	layout: () => layout,
-	overview: new Overview(overviewEl, docEl),
+	overview,
 };
 
 function stackRedraw(): void {
@@ -620,6 +621,7 @@ async function resolveDone(): Promise<void> {
 const resolveHost: ResolveViewHost = {
 	op,
 	onResolved: resolveDone,
+	overview,
 	busy: (on, message) => {
 		busySet(on);
 		statusSet(message, "info");

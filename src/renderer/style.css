@@ -254,6 +254,10 @@ body.busy #body {
 	background: var(--overview-modified);
 }
 
+.overview-conflict {
+	background: var(--warn-border);
+}
+
 .overview-edit {
 	left: 8px;
 	width: 4px;

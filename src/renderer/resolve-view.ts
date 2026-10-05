@@ -1,4 +1,5 @@
-import { type EditorState, type Range, StateField } from "@codemirror/state";
+import type { Chunk } from "@codemirror/merge";
+import { type EditorState, type Range, StateField, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import type { ConflictStage } from "../engine/merge.ts";
 import type { ConflictReport, MergetoolOutcome, ResolutionChoice } from "../engine/session.ts";
@@ -7,8 +8,9 @@ import { api, call, errorText } from "./api.ts";
 import { type TextCodec, textDecode, textEncode, textShow } from "./codec.ts";
 import { type BlockChoice, conflictBlocks, conflictChoose, conflictRelabel, conflictRelabelMarkers, conflictsCombine } from "./conflicts.ts";
 import { ask, button, el } from "./dom.ts";
-import { editorCreate } from "./editor.ts";
+import { editorChunksField, editorCreate, editorGo, editorSpan } from "./editor.ts";
 import { imageElement, imageType } from "./image.ts";
+import type { Overview, OverviewMark } from "./overview.ts";
 
 export type Report = Wire<ConflictReport>;
 type Record = Report["conflicts"][number];
@@ -20,7 +22,14 @@ export type ResolveViewHost = {
 	readonly onResolved: () => Promise<void>;
 	// Marks the app busy (cancellable) while an external merge tool is open, and not busy once it is closed; `message` goes to the status line either way.
 	readonly busy: (on: boolean, message: string) => void;
+	// The strip beside the scrollbar the view marks its conflicts on while it exists.
+	readonly overview: Overview;
 };
+
+// Where an overview tick jumps to: a position in a conflicted file's editor, or a record decided without one; either way, the record's row.
+type Target =
+	| { readonly kind: "editor"; readonly title: string; readonly row: HTMLElement; readonly view: EditorView; readonly pos: number }
+	| { readonly kind: "row"; readonly title: string; readonly row: HTMLElement };
 
 type Row = {
 	readonly record: Record;
@@ -28,6 +37,8 @@ type Row = {
 	// Unsaved work that leaving the view would lose.
 	dirty: () => boolean;
 	destroy: () => void;
+	// What is left to resolve, and what has been edited, for the overview.
+	marks: () => OverviewMark<Target>[];
 };
 
 const BLOCK_LABELS: readonly (readonly [BlockChoice, string])[] = [
@@ -173,6 +184,7 @@ export class ResolveView {
 	static async create(host: ResolveViewHost, report: Report): Promise<ResolveView> {
 		const view = new ResolveView(host, report, await call(api.mergetoolName()));
 		await view.#render();
+		host.overview.show(view.root, { marks: () => view.#rows.flatMap((r) => r.marks()), jump: (t) => view.#jump(t), title: (t) => t.title });
 		return view;
 	}
 
@@ -205,10 +217,20 @@ export class ResolveView {
 	}
 
 	destroy(): void {
+		this.#host.overview.hide(this.root);
 		for (const row of this.#rows) {
 			row.destroy();
 		}
 		this.root.remove();
+	}
+
+	// Goes to a tick's conflict block or edit, cursor and all, or brings its record into view. A tick drawn before its record was resolved, whose editor is gone, brings the record into view too.
+	#jump(target: Target): void {
+		if (target.kind === "editor" && target.view.dom.isConnected) {
+			editorGo(target.view, target.pos);
+			return;
+		}
+		target.row.scrollIntoView({ block: "start" });
 	}
 
 	#relabel(text: string): string {
@@ -258,6 +280,8 @@ export class ResolveView {
 		row.destroy();
 		row.destroy = () => undefined;
 		row.dirty = () => false;
+		row.marks = () => [];
+		this.#host.overview.changed();
 		row.root.replaceChildren(el("div", { class: "record-resolved", text: `✓ resolved — ${this.#relabel(row.record.message)}` }));
 	}
 
@@ -290,7 +314,7 @@ export class ResolveView {
 	async #rowContent(record: Record): Promise<Row> {
 		const root = el("section", { class: "record" }, this.#rowHeader(record));
 		const status = el("div", { class: "record-status" });
-		const editors: { path: string; view: EditorView; codec: TextCodec; initial: string }[] = [];
+		const editors: { path: string; view: EditorView; codec: TextCodec; initial: string; edits: StateField<readonly Chunk[]> }[] = [];
 		for (const path of record.paths) {
 			const bytes = await call(api.blobAt(this.#report.markerTree, path));
 			const decoded = bytes === undefined ? undefined : textDecode(bytes);
@@ -309,9 +333,12 @@ export class ResolveView {
 			const update = () => {
 				const left = conflictBlocks(view.state.doc.toString()).length;
 				counter.textContent = left === 0 ? "no conflict blocks left" : `${left} conflict block${left === 1 ? "" : "s"} left`;
+				this.#host.overview.changed();
 			};
 			const indentation = await call(api.indentation(this.#report.markerTree, path));
-			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField], indentation });
+			// What the user has changed since the view opened, markers and all.
+			const edits = editorChunksField(Text.of(initial.split("\n")));
+			const view = editorCreate(holder, { path, doc: initial, original: undefined, editable: true, onChange: () => update(), extensions: [blocksField, edits], indentation });
 			update();
 			const actions = el("span", { class: "actions" });
 			const combined = await this.#combined(record, path);
@@ -328,7 +355,7 @@ export class ResolveView {
 				actions.append(button(`Open in ${tool}`, () => this.#mergetoolOpen(tool, record, path, view, decoded.codec, status)));
 			}
 			header.append(actions);
-			editors.push({ path, view, codec: decoded.codec, initial });
+			editors.push({ path, view, codec: decoded.codec, initial, edits });
 		}
 		root.append(
 			el(
@@ -367,6 +394,25 @@ export class ResolveView {
 					e.view.destroy();
 				}
 			},
+			marks: () =>
+				editors.flatMap(({ path, view, edits }) => [
+					...conflictBlocks(view.state.doc.toString()).map((b) => ({
+						...editorSpan(view, b.from, b.to),
+						kind: "conflict" as const,
+						target: { kind: "editor" as const, title: path, row: root, view, pos: b.from },
+					})),
+					...view.state
+						.field(edits)
+						.map((c) => ({ ...editorSpan(view, c.fromB, c.toB), kind: "edit" as const, target: { kind: "editor" as const, title: path, row: root, view, pos: c.fromB } })),
+				]),
+		};
+	}
+
+	// A record decided without an editor, marked whole while it is unresolved.
+	#rowMarks(record: Record, root: HTMLElement): () => OverviewMark<Target>[] {
+		return () => {
+			const rect = root.getBoundingClientRect();
+			return [{ top: rect.top, bottom: rect.bottom, kind: "conflict", target: { kind: "row", title: record.paths.map((p) => this.#relabel(p)).join(", "), row: root } }];
 		};
 	}
 
@@ -516,7 +562,7 @@ export class ResolveView {
 				status,
 			),
 		);
-		return { record, root, dirty: () => chosen.size > 0, destroy: () => undefined };
+		return { record, root, dirty: () => chosen.size > 0, destroy: () => undefined, marks: this.#rowMarks(record, root) };
 	}
 
 	#rowFileDirectory(record: Record, dir: string, aside: string, followers: readonly Record[]): Row {
@@ -540,6 +586,6 @@ export class ResolveView {
 		}
 		actions.append(status);
 		root.append(actions);
-		return { record, root, dirty: () => false, destroy: () => undefined };
+		return { record, root, dirty: () => false, destroy: () => undefined, marks: this.#rowMarks(record, root) };
 	}
 }
