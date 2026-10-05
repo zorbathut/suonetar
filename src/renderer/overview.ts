@@ -9,7 +9,7 @@ export type OverviewKind = ChangeKind | "edit";
 // A change in an editor, in viewport pixels, and the editor position it starts at.
 export type OverviewChange = { readonly top: number; readonly bottom: number; readonly pos: number; readonly kind: ChangeKind };
 
-// A change in content pixels: from the top of the scroller's content.
+// A change in viewport pixels, as an editor or an element reports its place.
 export type OverviewMark<T> = { readonly top: number; readonly bottom: number; readonly kind: OverviewKind; readonly target: T };
 
 export type OverviewTick<T> = { readonly y: number; readonly height: number; readonly kind: OverviewKind; readonly target: T };
@@ -29,8 +29,8 @@ export function changeKind(aEmpty: boolean, bEmpty: boolean): ChangeKind | undef
 	return aEmpty ? "added" : bEmpty ? "removed" : "modified";
 }
 
-// The marks scaled from content `contentHeight` tall onto a track `trackHeight` tall, each at least `minPx` tall and kept within the track. Ticks of one kind that overlap merge into one, which jumps to its first mark's target.
-export function overviewTicks<T>(marks: readonly OverviewMark<T>[], contentHeight: number, trackHeight: number, minPx: number): OverviewTick<T>[] {
+// The marks, measured from the scroller's content top at `origin` (in the marks' viewport pixels), scaled from content `contentHeight` tall onto a track `trackHeight` tall, each at least `minPx` tall and kept within the track. Ticks of one kind that overlap merge into one, which jumps to its first mark's target.
+export function overviewTicks<T>(marks: readonly OverviewMark<T>[], origin: number, contentHeight: number, trackHeight: number, minPx: number): OverviewTick<T>[] {
 	if (contentHeight <= 0 || trackHeight <= 0) {
 		return [];
 	}
@@ -39,7 +39,7 @@ export function overviewTicks<T>(marks: readonly OverviewMark<T>[], contentHeigh
 	const last = new Map<OverviewKind, number>();
 	for (const m of [...marks].sort((a, b) => a.top - b.top)) {
 		const height = Math.min(trackHeight, Math.max(minPx, (m.bottom - m.top) * scale));
-		const y = Math.min(Math.max(0, m.top * scale), trackHeight - height);
+		const y = Math.min(Math.max(0, (m.top - origin) * scale), trackHeight - height);
 		const index = last.get(m.kind);
 		const before = index === undefined ? undefined : ticks[index];
 		if (index !== undefined && before !== undefined && y <= before.y + before.height) {
@@ -118,7 +118,8 @@ export class Overview {
 	#render<T>(source: OverviewSource<T>): void {
 		const scroller = this.#scroller;
 		this.#root.style.right = `${scroller.offsetWidth - scroller.clientWidth}px`;
-		const ticks = overviewTicks(source.marks(), scroller.scrollHeight, scroller.clientHeight, TICK_MIN_PX).map((t) => ({ ...t, title: source.title(t.target) }));
+		const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+		const ticks = overviewTicks(source.marks(), origin, scroller.scrollHeight, scroller.clientHeight, TICK_MIN_PX).map((t) => ({ ...t, title: source.title(t.target) }));
 		this.#jumps = ticks.map((t) => () => source.jump(t.target));
 		const drawn = JSON.stringify(ticks.map((t) => [t.y, t.height, t.kind, t.title]));
 		if (drawn === this.#drawn) {

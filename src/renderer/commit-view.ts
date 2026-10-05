@@ -8,7 +8,7 @@ import { api, call, errorText } from "./api.ts";
 import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
-import { editorChunksField, editorCreate, editorDiffChanges, editorDiffInline, editorDiffSet, editorSpan } from "./editor.ts";
+import { editorChunksField, editorCreate, editorDiffChanges, editorDiffInline, editorDiffSet, editorGo, editorSpan } from "./editor.ts";
 import { statusChange, statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
@@ -872,13 +872,11 @@ export class CommitView {
 		}
 	}
 
-	// Every section's changes and the user's edits, in content pixels. A section without an editor is marked whole.
+	// Every section's changes and the user's edits, in viewport pixels. A section without an editor is marked whole.
 	#overviewMarks(): OverviewMark<OverviewTarget>[] {
-		const scroller = this.#host.scroller;
-		const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
 		const marks: OverviewMark<OverviewTarget>[] = [];
 		const mark = (section: Section, span: { readonly top: number; readonly bottom: number }, kind: OverviewKind, pos: number | undefined): void => {
-			marks.push({ top: span.top - origin, bottom: span.bottom - origin, kind, target: { section, pos, lane: kind === "edit" ? "edit" : "diff" } });
+			marks.push({ top: span.top, bottom: span.bottom, kind, target: { section, pos, lane: kind === "edit" ? "edit" : "diff" } });
 		};
 		for (const section of this.#sections) {
 			const view = section.editor;
@@ -918,7 +916,7 @@ export class CommitView {
 			this.#sectionShow(s, false);
 			return;
 		}
-		this.#editorGo(view, pos);
+		editorGo(view, pos);
 	}
 
 	// Builds the section's editor if it has none, and switches it to the view's layout.
@@ -933,12 +931,6 @@ export class CommitView {
 	#stops(s: Section): readonly number[] {
 		const view = s.editor;
 		return view === undefined ? [] : (s.panes?.stops() ?? getChunks(view.state)?.chunks.map((c) => c.fromB) ?? []);
-	}
-
-	#editorGo(view: EditorView, pos: number): void {
-		const anchor = Math.min(pos, view.state.doc.length);
-		view.focus();
-		view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
 	}
 
 	// Next or previous changed chunk across the whole document, continuing into the following sections.
@@ -960,7 +952,7 @@ export class CommitView {
 			const head = i === start && fromCursor ? (s.panes?.head() ?? view.state.selection.main.head) : dir > 0 ? -1 : view.state.doc.length + 1;
 			const target = dir > 0 ? stops.find((p) => p > head) : stops.findLast((p) => p < head);
 			if (target !== undefined) {
-				this.#editorGo(view, target);
+				editorGo(view, target);
 				return;
 			}
 		}

@@ -92,6 +92,13 @@ export function editorSpan(view: EditorView, fromB: number, toB: number): { read
 	return { top, bottom: top + above };
 }
 
+// Puts the cursor at `pos` and scrolls it to the middle of the view, focusing the editor.
+export function editorGo(view: EditorView, pos: number): void {
+	const anchor = Math.min(pos, view.state.doc.length);
+	view.focus();
+	view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
+}
+
 // The changes the inline diff shows; none without one.
 export function editorDiffChanges(view: EditorView): OverviewChange[] {
 	return (getChunks(view.state)?.chunks ?? []).flatMap((c) => {
