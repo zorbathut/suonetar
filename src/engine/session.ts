@@ -1114,16 +1114,16 @@ export class Session {
 			}
 			return found;
 		};
+		const inDraft = new Map(byDraft.map((c) => [c.path, c]));
+		const inCommit = new Map(byCommit.map((c) => [c.path, c]));
 		const files: DocumentFile[] = [];
 		for (const path of paths) {
-			const inDraft = byDraft.find((c) => c.path === path);
-			const inCommit = byCommit.find((c) => c.path === path);
 			const [parent, commit, draft] = await Promise.all([this.#blobAt(parentTree, path), this.#blobAt(commitTree, path), this.#blobAt(draftTree, path)]);
 			const tooLarge = [parent, commit, draft].some((b) => b !== undefined && b.length > BLOB_LIMIT);
 			files.push({
 				path,
-				status: inDraft?.status ?? "=",
-				binary: (inDraft?.binary ?? false) || (inCommit?.binary ?? false),
+				status: inDraft.get(path)?.status ?? "=",
+				binary: (inDraft.get(path)?.binary ?? false) || (inCommit.get(path)?.binary ?? false),
 				refusal: refusals.get(path),
 				parent: tooLarge ? undefined : parent,
 				commit: tooLarge ? undefined : commit,

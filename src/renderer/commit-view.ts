@@ -808,10 +808,10 @@ export class CommitView {
 			);
 		}
 		if (s.edited) {
-			s.actions.append(button("Revert my edits", () => this.#fileRestore(s, "commit")));
+			s.actions.append(button("Revert my edits", () => this.#fileRestore(f.path, "commit")));
 		}
 		if (f.draft === undefined && (f.commit !== undefined || f.parent !== undefined)) {
-			s.actions.append(button("Restore file", () => this.#fileRestore(s, f.commit !== undefined ? "commit" : "parent")));
+			s.actions.append(button("Restore file", () => this.#fileRestore(f.path, f.commit !== undefined ? "commit" : "parent")));
 		}
 	}
 
@@ -835,9 +835,8 @@ export class CommitView {
 	}
 
 	// Puts the file back as it is in the commit or its parent, then rebuilds the view: restoring can change what other sections show.
-	#fileRestore(s: Section, from: "commit" | "parent"): void {
+	#fileRestore(path: string, from: "commit" | "parent"): void {
 		const oid = this.#doc.oid;
-		const path = s.file.path;
 		this.#rework("Restoring the file", async () => {
 			await call(api.draftRestore(oid, this.#doc.parentTree, path, from));
 			await this.#host.reload(path);
