@@ -1,14 +1,15 @@
+import type { DocumentFileStatus } from "../engine/session.ts";
 import { el } from "./dom.ts";
-import { type FileStatus, statusClass, statusLabel } from "./file-status.ts";
+import { statusClass, statusLabel } from "./file-status.ts";
 
-type Status = FileStatus;
+type TreeFile = { readonly path: string } & DocumentFileStatus;
 
 export type TreeNode =
-	| { readonly kind: "file"; readonly name: string; readonly path: string; readonly status: Status }
+	| ({ readonly kind: "file"; readonly name: string } & TreeFile)
 	// `name` is the row's label, several directories deep when single-directory chains are merged; `path` is the deepest directory's full path.
 	| { readonly kind: "dir"; readonly name: string; readonly path: string; readonly children: readonly TreeNode[] };
 
-type DirBuilding = { dirs: Map<string, DirBuilding>; files: { name: string; path: string; status: Status }[] };
+type DirBuilding = { dirs: Map<string, DirBuilding>; files: ({ name: string } & TreeFile)[] };
 
 function byCodeUnit(a: { name: string }, b: { name: string }): number {
 	return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
@@ -37,7 +38,7 @@ function nodesOf(dir: DirBuilding, prefix: string): TreeNode[] {
 }
 
 // The changed files as a directory tree: directories before files, each level in code-unit order as git sorts.
-export function fileTree(files: readonly { readonly path: string; readonly status: Status }[]): TreeNode[] {
+export function fileTree(files: readonly TreeFile[]): TreeNode[] {
 	const root: DirBuilding = { dirs: new Map(), files: [] };
 	for (const file of files) {
 		const parts = file.path.split("/");
@@ -51,7 +52,8 @@ export function fileTree(files: readonly { readonly path: string; readonly statu
 			}
 			dir = next;
 		}
-		dir.files.push({ name, path: file.path, status: file.status });
+		// A node keeps the file's status, not the contents a document file carries.
+		dir.files.push({ name, path: file.path, ...(file.status === "R" ? { status: file.status, renamedFrom: file.renamedFrom } : { status: file.status, renamedFrom: undefined }) });
 	}
 	return nodesOf(root, "");
 }
@@ -102,7 +104,11 @@ export function fileTreeRender(container: HTMLElement, nodes: readonly TreeNode[
 			if (node.kind === "file") {
 				const row = el(
 					"div",
-					{ class: "tree-row tree-file", title: node.path, onclick: () => handlers.reveal(node.path) },
+					{
+						class: "tree-row tree-file",
+						title: node.renamedFrom === undefined ? node.path : `${node.path}, renamed from ${node.renamedFrom}`,
+						onclick: () => handlers.reveal(node.path),
+					},
 					el("span", { class: statusClass(node.status), text: node.status, title: statusLabel(node.status) }),
 					el("span", { class: "tree-name", text: node.name }),
 				);

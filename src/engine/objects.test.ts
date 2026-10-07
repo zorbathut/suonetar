@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { CatFile, commitRead, commitSubject, treeDiff, treeList } from "./objects.ts";
-import { type Fixture, repoFixture, treeWide } from "./test-support/repo.ts";
+import { CatFile, commitRead, commitSubject, treeDiff, treeList, treeRenames } from "./objects.ts";
+import { type Fixture, lineSet, lines, repoFixture, treeWide } from "./test-support/repo.ts";
 
 describe("objects", () => {
 	let fx: Fixture;
@@ -60,5 +60,33 @@ describe("objects", () => {
 		const diff = await treeDiff(fx.repo, c1, c2);
 		expect(Object.fromEntries(diff.map((d) => [d.path, d.status]))).toEqual({ "a.txt": "M", "bin.dat": "M", "c.txt": "A", "dir/b.txt": "D" });
 		expect(diff.find((d) => d.path === "bin.dat")?.binary).toBe(true);
+	});
+
+	test("pairs renames, edited or not, and leaves an unrelated deletion and addition apart", async () => {
+		const c1 = fx.commit("base", { "same.txt": lines("same"), "edited.txt": lines("edited"), "gone.txt": lines("gone") });
+		const c2 = fx.commit("rename", {
+			"same.txt": null,
+			"moved/same.txt": lines("same"),
+			"edited.txt": null,
+			"renamed.txt": lineSet(lines("edited"), 3, "changed"),
+			"gone.txt": null,
+			"new.txt": lines("unrelated"),
+		});
+		const renames = await treeRenames(fx.repo, c1, c2);
+		expect(renames.sort((a, b) => a.to.localeCompare(b.to))).toEqual([
+			{ from: "same.txt", to: "moved/same.txt" },
+			{ from: "edited.txt", to: "renamed.txt" },
+		]);
+	});
+
+	test("pairs neither empty files nor submodules", async () => {
+		fx.commit("base", { "a/empty.txt": "", "keep.txt": "keep\n" });
+		const sub = fx.git("rev-parse", "HEAD");
+		fx.git("update-index", "--add", "--cacheinfo", `160000,${sub},sub`);
+		const c1 = fx.commit("submodule", {});
+		fx.git("rm", "-q", "--cached", "sub");
+		fx.git("update-index", "--add", "--cacheinfo", `160000,${sub},sub2`);
+		const c2 = fx.commit("move them", { "a/empty.txt": null, "b/empty.txt": "" });
+		expect(await treeRenames(fx.repo, c1, c2)).toEqual([]);
 	});
 });

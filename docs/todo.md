@@ -5,3 +5,4 @@
 - Optional coordination with Claude Code: a PreToolUse/PostToolUse hook pair sharing a lock with Suonetar (`mkdir .git/suonetar/lock`), so an apply lands only between Claude's tool calls. Git's index lock does not cover its direct file writes.
 - Formatting in the editor: an external command run on the file in the private worktree at that commit, which covers stdin and in-place formatters alike. Waiting on a formatter being chosen for the target repository, whose hook lints but does not format.
 - A list-then-fetch `commitDocument`, if commits grow big enough to need it; the target repository's largest recent commit is 59 files and under 800 KiB.
+- Renames in the uncommitted-changes view, paired as commits pair them; `git mv` stages one. The status read is shared with the poll, so pairing would need its own `git status` call.

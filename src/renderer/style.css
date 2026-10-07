@@ -463,7 +463,8 @@ section.file {
 }
 
 .status-M,
-.status-T {
+.status-T,
+.status-R {
 	color: var(--accent);
 }
 

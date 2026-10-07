@@ -8,7 +8,7 @@ function show(nodes: readonly TreeNode[], depth = 0): string[] {
 	);
 }
 
-const f = (path: string, status: "A" | "M" | "D" | "T" | "=" = "M") => ({ path, status });
+const f = (path: string, status: "A" | "M" | "D" | "T" | "=" = "M") => ({ path, status, renamedFrom: undefined });
 
 describe("fileTree", () => {
 	it("nests by directory, directories first, each level in code-unit order", () => {

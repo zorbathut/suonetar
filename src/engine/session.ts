@@ -23,7 +23,7 @@ import { fileReaderDisk, gitOk, gitRunnerSpawn, hookRunnerSpawn, type Oid, type 
 import { type HookCache, type HookCommit, type HookFailure, type HookPassResult, type HookProgress, hookIdentity, hooksPass } from "./hooks.ts";
 import { type Conflict, type MergeResult, mergeTrees } from "./merge.ts";
 import { type MergetoolResult, mergetoolName, mergetoolRun } from "./mergetool.ts";
-import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, treeDiff, treeList } from "./objects.ts";
+import { CatFile, type CommitInfo, commitParse, commitRead, commitSubject, type FileChange, type TreeRename, treeDiff, treeList, treeRenames } from "./objects.ts";
 import { type ReplayStep, replayCommit, stepsReflag } from "./replay.ts";
 import { branchCurrent, configGet, type Stack, type StackCommit, stackRead } from "./stack.ts";
 import { type DraftEntry, type ResolutionChange, type ResolutionEntry, STORE_REF, type Store, storeRead, storeWrite } from "./store.ts";
@@ -105,14 +105,15 @@ export type MergetoolOutcome = MergetoolResult | { readonly kind: "stale" };
 // The staged or unstaged changes as a read-only document; `omitted` files were left out past the cap.
 export type WorktreeDocument = { readonly side: WorktreeSide; readonly files: readonly DocumentFile[]; readonly omitted: number; readonly conflicted: boolean };
 
-export type DocumentFile = {
+// Status of the file in the commit as it would be published (with the draft); "=" when the draft undoes the commit's whole change to it, "R" when the commit renames it from `renamedFrom`, deleted there.
+export type DocumentFileStatus = { readonly status: "R"; readonly renamedFrom: string } | { readonly status: "A" | "M" | "D" | "T" | "="; readonly renamedFrom: undefined };
+
+export type DocumentFile = DocumentFileStatus & {
 	readonly path: string;
-	// Status of the file in the commit as it would be published (with the draft); "=" when the draft undoes the commit's whole change to it.
-	readonly status: "A" | "M" | "D" | "T" | "=";
 	readonly binary: boolean;
 	// Why the file cannot be edited as text, or undefined when it can.
 	readonly refusal: string | undefined;
-	// Contents at the parent, at the commit without the user's edits, and as shown (with them); undefined where the file does not exist, or when `tooLarge`. For a commit in the stack, all three are as restacked onto the edits below.
+	// Contents at the parent (for a renamed file, the parent's `renamedFrom`), at the commit without the user's edits, and as shown (with them); undefined where the file does not exist, or when `tooLarge`. For a commit in the stack, all three are as restacked onto the edits below.
 	readonly parent: Buffer | undefined;
 	readonly commit: Buffer | undefined;
 	readonly draft: Buffer | undefined;
@@ -1097,10 +1098,12 @@ export class Session {
 		const repo = this.#view;
 		const byCommit = await treeDiff(repo, parentTree, commitTree);
 		const byDraft = draftTree === commitTree ? byCommit : await treeDiff(repo, parentTree, draftTree);
-		const paths = [...new Set([...byCommit, ...byDraft].map((c) => c.path))].sort();
+		const renamed = await this.#renamesShown(parentTree, commitTree, draftTree, byCommit, byDraft);
+		const renamedFrom = new Set(renamed.values());
+		const paths = [...new Set([...byCommit, ...byDraft].map((c) => c.path))].filter((p) => !renamedFrom.has(p)).sort();
 		const refusals = await editability(repo, draftTree, paths);
 		const shown = await indentationFor(repo, this.#cat, draftTree, paths);
-		const deleted = byDraft.filter((c) => c.status === "D").map((c) => c.path);
+		const deleted = byDraft.filter((c) => c.status === "D" && !renamedFrom.has(c.path)).map((c) => c.path);
 		const before = deleted.length === 0 ? new Map<string, Indentation>() : await indentationFor(repo, this.#cat, parentTree, deleted);
 		const blobs = new Map(
 			paths.length === 0
@@ -1116,14 +1119,17 @@ export class Session {
 		};
 		const inDraft = new Map(byDraft.map((c) => [c.path, c]));
 		const inCommit = new Map(byCommit.map((c) => [c.path, c]));
+		const binary = (path: string): boolean => (inDraft.get(path)?.binary ?? false) || (inCommit.get(path)?.binary ?? false);
 		const files: DocumentFile[] = [];
 		for (const path of paths) {
-			const [parent, commit, draft] = await Promise.all([this.#blobAt(parentTree, path), this.#blobAt(commitTree, path), this.#blobAt(draftTree, path)]);
+			const from = renamed.get(path);
+			const [parent, commit, draft] = await Promise.all([this.#blobAt(parentTree, from ?? path), this.#blobAt(commitTree, path), this.#blobAt(draftTree, path)]);
 			const tooLarge = [parent, commit, draft].some((b) => b !== undefined && b.length > BLOB_LIMIT);
+			const either = (set: ReadonlySet<string>): boolean => set.has(path) || (from !== undefined && set.has(from));
 			files.push({
 				path,
-				status: inDraft.get(path)?.status ?? "=",
-				binary: (inDraft.get(path)?.binary ?? false) || (inCommit.get(path)?.binary ?? false),
+				...(from === undefined ? { status: inDraft.get(path)?.status ?? "=", renamedFrom: undefined } : { status: "R", renamedFrom: from }),
+				binary: binary(path) || (from !== undefined && binary(from)),
 				refusal: refusals.get(path),
 				parent: tooLarge ? undefined : parent,
 				commit: tooLarge ? undefined : commit,
@@ -1131,11 +1137,39 @@ export class Session {
 				draftOid: blobs.get(path),
 				tooLarge,
 				indentation: indentationOf(path),
-				mineUnknown: mineUnknown.has(path),
-				provisional: provisional.has(path),
+				mineUnknown: either(mineUnknown),
+				provisional: either(provisional),
 			});
 		}
 		return files;
+	}
+
+	// The renames to show, new path to old: the commit's own, so that editing a renamed file never splits it, then those only the draft makes. Each is kept only while the draft still deletes the old path and adds the new one, and no path is in two.
+	async #renamesShown(parentTree: Oid, commitTree: Oid, draftTree: Oid, byCommit: readonly FileChange[], byDraft: readonly FileChange[]): Promise<Map<string, string>> {
+		// A rename needs a deletion and an addition to pair; most commits have no such pair, and no need for git to look.
+		const pairable = (changes: readonly FileChange[]) => changes.some((c) => c.status === "D") && changes.some((c) => c.status === "A");
+		const inCommit = new Map(byCommit.map((c) => [c.path, c.status]));
+		// A pair the draft makes counts only where the commit leaves the old file as the parent has it or deletes it, so restoring it from the parent loses none of the commit's change, and where the commit's own detection had not already left the two apart, so edits never join them.
+		const draftOwn = ({ from, to }: TreeRename): boolean => {
+			const old = inCommit.get(from);
+			return (old === undefined || old === "D") && !(old === "D" && inCommit.get(to) === "A");
+		};
+		const candidates = [
+			...(pairable(byCommit) ? await treeRenames(this.#view, parentTree, commitTree) : []),
+			...(draftTree !== commitTree && pairable(byDraft) ? (await treeRenames(this.#view, parentTree, draftTree)).filter(draftOwn) : []),
+		];
+		const status = new Map(byDraft.map((c) => [c.path, c.status]));
+		const renamed = new Map<string, string>();
+		const taken = new Set<string>();
+		for (const { from, to } of candidates) {
+			if (taken.has(from) || taken.has(to) || status.get(from) !== "D" || status.get(to) !== "A") {
+				continue;
+			}
+			taken.add(from);
+			taken.add(to);
+			renamed.set(to, from);
+		}
+		return renamed;
 	}
 
 	async #blobAt(tree: Oid, path: string): Promise<Buffer | undefined> {

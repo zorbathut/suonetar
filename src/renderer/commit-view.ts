@@ -9,7 +9,7 @@ import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
 import { editorChunksField, editorCreate, editorDiffChanges, editorDiffInline, editorDiffSet, editorGo, editorSpan } from "./editor.ts";
-import { statusChange, statusClass, statusLabel } from "./file-status.ts";
+import { renameLabel, statusChange, statusClass, statusLabel } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
 import type { Overview, OverviewKind, OverviewMark } from "./overview.ts";
@@ -113,6 +113,11 @@ export function saveKeyMessage(oid: string): string {
 	return `${oid}\0`;
 }
 
+// What a section's header and its ticks call its file.
+function sectionLabel(file: File): string {
+	return file.renamedFrom === undefined ? file.path : renameLabel(file.renamedFrom, file.path);
+}
+
 function newlines(bytes: Uint8Array | undefined): number {
 	let count = 0;
 	for (const b of bytes ?? []) {
@@ -176,7 +181,7 @@ export class CommitView {
 		window.addEventListener("pointerup", this.#pointerUp);
 		this.#highlightSchedule();
 		this.#idleStart();
-		host.overview.show(this.root, { marks: () => this.#overviewMarks(), jump: (t) => this.#overviewJump(t), title: (t) => t.section.file.path });
+		host.overview.show(this.root, { marks: () => this.#overviewMarks(), jump: (t) => this.#overviewJump(t), title: (t) => sectionLabel(t.section.file) });
 	}
 
 	static async create(host: CommitViewHost, source: CommitViewSource): Promise<CommitView> {
@@ -417,7 +422,7 @@ export class CommitView {
 			"div",
 			{ class: "section-header" },
 			el("span", { class: statusClass(file.status), text: file.status, title: statusLabel(file.status) }),
-			el("span", { class: "path", text: file.path }),
+			el("span", { class: "path", text: sectionLabel(file), ...(file.renamedFrom === undefined ? {} : { title: `${file.path}, renamed from ${file.renamedFrom}` }) }),
 			badges,
 			saveState,
 			actions,
@@ -812,6 +817,10 @@ export class CommitView {
 		}
 		if (f.draft === undefined && (f.commit !== undefined || f.parent !== undefined)) {
 			s.actions.append(button("Restore file", () => this.#fileRestore(f.path, f.commit !== undefined ? "commit" : "parent")));
+		}
+		// Puts back the file this one was renamed from, so the commit copies it instead; the way out of a pairing git made between files that only look alike.
+		if (f.renamedFrom !== undefined) {
+			s.actions.append(button(`Restore ${f.renamedFrom}`, () => this.#fileRestore(f.renamedFrom, "parent")));
 		}
 	}
 

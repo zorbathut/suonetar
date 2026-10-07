@@ -187,7 +187,10 @@ async function diskRead(repo: Repo, path: string, limit: number): Promise<Read> 
 	}
 }
 
-function statusLetter(letter: string): DocumentFile["status"] {
+// Renames are not paired here: each side lists a renamed file as a deletion and an addition.
+type WorktreeFileStatus = Exclude<DocumentFile["status"], "R">;
+
+function statusLetter(letter: string): WorktreeFileStatus {
 	return letter === "A" || letter === "D" || letter === "T" ? letter : "M";
 }
 
@@ -223,7 +226,7 @@ export async function worktreeFiles(
 	for (const entry of shown) {
 		let parent: Read;
 		let shownVersion: Read;
-		let status: DocumentFile["status"];
+		let status: WorktreeFileStatus;
 		if (entry.kind === "ordinary" && side === "staged") {
 			parent = await blobRead(cat, entry.mH, entry.hH, limit);
 			shownVersion = await blobRead(cat, entry.mI, entry.hI, limit);
@@ -250,6 +253,7 @@ export async function worktreeFiles(
 		files.push({
 			path: entry.path,
 			status,
+			renamedFrom: undefined,
 			binary: binaryMarked.has(entry.path) || binaryLooking(parent.data) || binaryLooking(shownVersion.data),
 			refusal: undefined,
 			parent: tooLarge ? undefined : parent.data,

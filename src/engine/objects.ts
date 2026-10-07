@@ -245,6 +245,30 @@ export async function treeDiff(repo: Repo, from: Oid, to: Oid): Promise<FileChan
 	return changes;
 }
 
+// How alike a deleted and an added file must be for git to pair them as a rename: its own default, which pairs a rename with a fair share of edits.
+const RENAME_SIMILARITY = "50%";
+
+export type TreeRename = { readonly from: string; readonly to: string };
+
+// The files renamed between two trees, as git pairs a deletion with a similar addition. Empty files would pair at random, and a submodule has no content to diff, so neither is paired.
+export async function treeRenames(repo: Repo, from: Oid, to: Oid): Promise<TreeRename[]> {
+	// One raw record per rename: `:<old mode> <new mode> <old oid> <new oid> R<score>`, then the old path and the new.
+	const raw = splitNul(await gitOk(repo, ["diff-tree", "-r", "-z", "--raw", `-M${RENAME_SIMILARITY}`, "--no-rename-empty", "--diff-filter=R", from, to]));
+	const renames: TreeRename[] = [];
+	for (let i = 0; i < raw.length; i += 3) {
+		const [oldMode, newMode] = raw[i]?.slice(1).split(" ") ?? [];
+		const old = raw[i + 1];
+		const path = raw[i + 2];
+		if (oldMode === undefined || newMode === undefined || old === undefined || path === undefined) {
+			throw new Error(`unparseable diff-tree rename record: ${raw[i]}`);
+		}
+		if (oldMode !== "160000" && newMode !== "160000") {
+			renames.push({ from: old, to: path });
+		}
+	}
+	return renames;
+}
+
 export type TreeSide = { readonly mode: string; readonly oid: Oid } | undefined;
 
 export type TreeChangeRaw = { readonly path: string; readonly old: TreeSide; readonly new: TreeSide };
