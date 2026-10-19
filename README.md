@@ -8,6 +8,8 @@ Suonetar is a commit-stack editor for Git. It's designed for weirdos who use LLM
 
 It lets you scrub through the commits on a branch, open any one of them in a real editor, change its files or message, and Apply; every commit above it is restacked automatically, with nothing left half-done in the repository.
 
+![Suonetar showing a six-commit stack, with one commit edited and one in conflict, and the selected commit's diff shown inline](docs/suonetar-demo.png)
+
 It's built to sit beside an agent (Claude Code, for those with taste, smug emoji here) that commits in the same repository's main worktree. Reading an agent's stack of commits and fixing the one that went wrong happens in one view, and Suonetar never stashes, checks out, or rebases in your working tree.
 
 Named after the Finnish Kalevala's Lady of Veins, who spins new veins to mend broken ones.
