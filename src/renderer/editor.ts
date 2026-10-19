@@ -15,6 +15,7 @@ import {
 	keymap,
 	lineNumbers,
 	rectangularSelection,
+	ViewPlugin,
 } from "@codemirror/view";
 import type { Indentation } from "../engine/editorconfig.ts";
 import type { Wire } from "../shared/api.ts";
@@ -35,8 +36,26 @@ export type EditorSpec = {
 	readonly indentation: Wire<Indentation>;
 };
 
-export function darkMode(): boolean {
-	return window.matchMedia("(prefers-color-scheme: dark)").matches;
+const themeCompartment = new Compartment();
+
+function themeQuery(): MediaQueryList {
+	return window.matchMedia("(prefers-color-scheme: dark)");
+}
+
+function themeCurrent(): Extension {
+	return themeQuery().matches ? oneDark : [];
+}
+
+// Follows the system theme while the editor lives.
+const themeFollow = ViewPlugin.define((view) => {
+	const query = themeQuery();
+	const onChange = (): void => view.dispatch({ effects: themeCompartment.reconfigure(themeCurrent()) });
+	query.addEventListener("change", onChange);
+	return { destroy: () => query.removeEventListener("change", onChange) };
+});
+
+function themeExtension(): Extension {
+	return [themeCompartment.of(themeCurrent()), themeFollow];
 }
 
 export const REVERT_CHUNK_TITLE = "Take this chunk out of the commit and every commit above it";
@@ -141,7 +160,7 @@ export function editorCreate(parent: HTMLElement, spec: EditorSpec): EditorView 
 		language.of([]),
 		// Read-only editors stay focusable, so the cursor and change navigation still work in them.
 		EditorState.readOnly.of(!spec.editable),
-		darkMode() ? oneDark : [],
+		themeExtension(),
 		spec.extensions,
 	];
 	extensions.push(diffCompartment.of(spec.original === undefined ? [] : editorDiffInline(spec.original, spec.editable)));
