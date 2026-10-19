@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, type NativeImage, nativeImage, nativeTheme, type WebContents } from "electron";
 import { ErrorNotRepository } from "../engine/errors.ts";
 import { Session } from "../engine/session.ts";
 import { LAYOUTS } from "../shared/api.ts";
@@ -42,12 +42,17 @@ type WindowHooks = {
 	readonly pageLoaded: () => void;
 };
 
+// The page's --bg, shown before the page first paints and in the gaps while the window resizes.
+function windowBackground(): string {
+	return nativeTheme.shouldUseDarkColors ? "#1e1e1e" : "#ffffff";
+}
+
 function windowCreate(title: string, hooks: WindowHooks): AppWindow {
 	const win = new BrowserWindow({
 		width: 1600,
 		height: 1000,
 		title,
-		backgroundColor: "#1e1e1e",
+		backgroundColor: windowBackground(),
 		icon: iconLoad(),
 		webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
 	});
@@ -55,6 +60,10 @@ function windowCreate(title: string, hooks: WindowHooks): AppWindow {
 
 	// The page's <title> would otherwise replace this one, which names the repository.
 	win.on("page-title-updated", (event) => event.preventDefault());
+
+	const themeUpdated = (): void => win.setBackgroundColor(windowBackground());
+	nativeTheme.on("updated", themeUpdated);
+	win.on("closed", () => nativeTheme.off("updated", themeUpdated));
 
 	// Nothing may navigate the window away from the app (a dropped file, a clicked link): unsaved edits live in the page.
 	contents.on("will-navigate", (event) => event.preventDefault());
