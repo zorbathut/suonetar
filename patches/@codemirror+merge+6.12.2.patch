@@ -1,0 +1,64 @@
+diff --git a/node_modules/@codemirror/merge/dist/index.cjs b/node_modules/@codemirror/merge/dist/index.cjs
+--- a/node_modules/@codemirror/merge/dist/index.cjs
++++ b/node_modules/@codemirror/merge/dist/index.cjs
+@@ -1545,6 +1545,8 @@ class DeletionWidget extends view.WidgetType {
+     eq(other) { return this.dom == other.dom; }
+     toDOM(view) { return this.dom || (this.dom = this.buildDOM(view)); }
+ }
++// Suonetar patch: deleted lines per .cm-deletedGroup.
++const DELETED_GROUP_LINES = 200;
+ function deletionWidget(state, chunk, hideContent) {
+     let known = DeletionWidgets.get(chunk.changes);
+     if (known)
+@@ -1577,10 +1579,18 @@ function deletionWidget(state, chunk, hideContent) {
+             return dom;
+         let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA);
+         let lang = syntaxHighlightDeletions && state.facet(language.language);
++        // Suonetar patch: lines go into groups of DELETED_GROUP_LINES, which Suonetar's CSS (.cm-deletedGroup) lays out only near the viewport (content-visibility), so a deletion of many thousands of lines costs no more layout than one screenful.
++        let group = null, groupLines = 0;
+         let line = makeLine();
+         let changes = chunk.changes, changeI = 0, inside = false;
+         function makeLine() {
+-            let div = dom.appendChild(document.createElement("div"));
++            if (group == null || groupLines == DELETED_GROUP_LINES) {
++                group = dom.appendChild(document.createElement("div"));
++                group.className = "cm-deletedGroup";
++                groupLines = 0;
++            }
++            groupLines++;
++            let div = group.appendChild(document.createElement("div"));
+             div.className = "cm-deletedLine";
+             return div.appendChild(document.createElement("del"));
+         }
+diff --git a/node_modules/@codemirror/merge/dist/index.js b/node_modules/@codemirror/merge/dist/index.js
+--- a/node_modules/@codemirror/merge/dist/index.js
++++ b/node_modules/@codemirror/merge/dist/index.js
+@@ -1543,6 +1543,8 @@ class DeletionWidget extends WidgetType {
+     eq(other) { return this.dom == other.dom; }
+     toDOM(view) { return this.dom || (this.dom = this.buildDOM(view)); }
+ }
++// Suonetar patch: deleted lines per .cm-deletedGroup.
++const DELETED_GROUP_LINES = 200;
+ function deletionWidget(state, chunk, hideContent) {
+     let known = DeletionWidgets.get(chunk.changes);
+     if (known)
+@@ -1575,10 +1577,18 @@ function deletionWidget(state, chunk, hideContent) {
+             return dom;
+         let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA);
+         let lang = syntaxHighlightDeletions && state.facet(language);
++        // Suonetar patch: lines go into groups of DELETED_GROUP_LINES, which Suonetar's CSS (.cm-deletedGroup) lays out only near the viewport (content-visibility), so a deletion of many thousands of lines costs no more layout than one screenful.
++        let group = null, groupLines = 0;
+         let line = makeLine();
+         let changes = chunk.changes, changeI = 0, inside = false;
+         function makeLine() {
+-            let div = dom.appendChild(document.createElement("div"));
++            if (group == null || groupLines == DELETED_GROUP_LINES) {
++                group = dom.appendChild(document.createElement("div"));
++                group.className = "cm-deletedGroup";
++                groupLines = 0;
++            }
++            groupLines++;
++            let div = group.appendChild(document.createElement("div"));
+             div.className = "cm-deletedLine";
+             return div.appendChild(document.createElement("del"));
+         }

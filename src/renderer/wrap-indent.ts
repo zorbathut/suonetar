@@ -37,7 +37,7 @@ function lineDecoration(columns: number): Decoration {
 	return decoration;
 }
 
-const DELETED_PENDING = ".cm-deletedChunk > .cm-deletedLine:not([data-wrap-indent])";
+const DELETED_PENDING = ".cm-deletedGroup > .cm-deletedLine:not([data-wrap-indent])";
 
 // Soft-wraps long lines, each continuation row starting two indent units past the line's own indentation; the unit is the editor's own (`indentUnit`), so the hang matches what Enter inserts.
 export function wrapIndented(): Extension {

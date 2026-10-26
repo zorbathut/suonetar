@@ -78,6 +78,8 @@ npm run dist    # package for this platform into dist/: an AppImage and a tarbal
 
 A packaged build takes the same arguments as `npm run app`: `suonetar-<version>-linux-x86_64.AppImage [<repository> [<base>]]`, or none to open the repository it is run in, if any. Pushing a `v*` tag builds both packages on GitHub Actions, once the tests pass, and publishes them as a release; a tag with a suffix such as `v1.2.0-rc1` is marked as a prerelease.
 
+`@codemirror/merge` is pinned and patched (`patches/`, applied by `postinstall`): its inline diff draws deleted lines in groups that the stylesheet lays out only near the viewport. To upgrade it, bump the pin, redo the change in its `dist/index.js` and `dist/index.cjs`, and run `npx patch-package @codemirror/merge`; `merge-patch.test.ts` fails while the patch is missing.
+
 - `src/engine`: git operations, Node only.
 - `src/main`: the Electron main process, which hosts the engine.
 - `src/preload`: the IPC bridge.

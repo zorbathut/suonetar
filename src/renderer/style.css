@@ -515,14 +515,25 @@ textarea.message {
 }
 
 .cm-lineWrapping .cm-line,
-.cm-lineWrapping .cm-deletedChunk > .cm-deletedLine {
+.cm-lineWrapping .cm-deletedGroup > .cm-deletedLine {
 	text-indent: min(var(--wrap-indent, 0ch), 50cqw) hanging;
 }
 
 /* The button floats over the top right of a deleted chunk, or, when a chunk shows no deleted lines (it only inserts, or is shown inline), of its first line; that line wraps short of it rather than under it. */
-.cm-deletedChunk > .cm-chunkButtons + .cm-deletedLine,
+.cm-deletedChunk > .cm-chunkButtons + .cm-deletedGroup > .cm-deletedLine:first-child,
 .cm-deletedChunk:has(.cm-chunkButtons):not(:has(.cm-deletedLine)) + .cm-line {
 	padding-right: 110px;
+}
+
+/* The merge view's deleted lines come in groups of 200 (DELETED_GROUP_LINES in the local patch, patches/@codemirror+merge+*.patch, which the estimate below matches); a group is laid out only near the viewport, so a deletion of many thousands of lines lays out like one screenful. The estimate is height only: a width would hold the content open past the pane and stop lines wrapping. */
+.cm-deletedGroup {
+	content-visibility: auto;
+	contain-intrinsic-size: none auto calc(200 * 1lh);
+}
+
+/* A group above the viewport takes its real height (wrapped lines make it far from the estimate) as the reader scrolls up into it, so the browser has to anchor the scroll on what is in view. CodeMirror turns that off in its scroller to anchor that scroller itself, but here the document around the editor scrolls. Only the inline diff (unifiedMergeView marks its editor cm-merge-b): in panes, browser anchoring makes their own jumps worse. The extra class outweighs CodeMirror's own rule rather than relying on stylesheet order. */
+.cm-editor.cm-merge-b > .cm-scroller {
+	overflow-anchor: auto;
 }
 
 .cm-conflict-marker {
