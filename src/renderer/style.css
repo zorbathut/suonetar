@@ -214,6 +214,11 @@ body.busy #body {
 	color: var(--fg-dim);
 }
 
+.tree-flag {
+	flex: none;
+	color: var(--warn-border);
+}
+
 .tree-toggle {
 	width: 1ch;
 	color: var(--fg-dim);

@@ -1,4 +1,5 @@
 import type { DocumentFile } from "../engine/session.ts";
+import { BLOB_LIMIT } from "../shared/limits.ts";
 import type { ChangeKind } from "./overview.ts";
 
 export type FileStatus = DocumentFile["status"];
@@ -43,6 +44,9 @@ export function statusChange(status: FileStatus): ChangeKind | undefined {
 		}
 	}
 }
+
+// Why a file over the size limit has no editor.
+export const TOO_LARGE_LABEL = `Too large to show here (over ${BLOB_LIMIT / (1024 * 1024)} MiB).`;
 
 // The status letter's element classes; "=" is not usable in a class selector.
 export function statusClass(status: FileStatus): string {

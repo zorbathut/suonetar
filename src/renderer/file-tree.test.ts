@@ -8,7 +8,7 @@ function show(nodes: readonly TreeNode[], depth = 0): string[] {
 	);
 }
 
-const f = (path: string, status: "A" | "M" | "D" | "T" | "=" = "M") => ({ path, status, renamedFrom: undefined });
+const f = (path: string, status: "A" | "M" | "D" | "T" | "=" = "M", tooLarge = false) => ({ path, status, renamedFrom: undefined, tooLarge });
 
 describe("fileTree", () => {
 	it("nests by directory, directories first, each level in code-unit order", () => {
@@ -44,6 +44,16 @@ describe("fileTree", () => {
 	it("handles root files and nothing at all", () => {
 		expect(show(fileTree([f("x")]))).toEqual(["x M"]);
 		expect(fileTree([])).toEqual([]);
+	});
+
+	it("keeps whether each file is too large to show, at any depth", () => {
+		const tooLarge = (nodes: readonly TreeNode[]): string[] => nodes.flatMap((n) => (n.kind === "dir" ? tooLarge(n.children) : [`${n.path} ${n.tooLarge}`]));
+		expect(tooLarge(fileTree([f("big.bin", "A", true), f("small.txt"), f("src/lib/huge.json", "M", true), f("src/lib/tiny.ts")]))).toEqual([
+			"src/lib/huge.json true",
+			"src/lib/tiny.ts false",
+			"big.bin true",
+			"small.txt false",
+		]);
 	});
 });
 

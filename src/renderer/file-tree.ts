@@ -1,8 +1,8 @@
 import type { DocumentFileStatus } from "../engine/session.ts";
 import { el } from "./dom.ts";
-import { statusClass, statusLabel } from "./file-status.ts";
+import { statusClass, statusLabel, TOO_LARGE_LABEL } from "./file-status.ts";
 
-type TreeFile = { readonly path: string } & DocumentFileStatus;
+type TreeFile = { readonly path: string; readonly tooLarge: boolean } & DocumentFileStatus;
 
 export type TreeNode =
 	| ({ readonly kind: "file"; readonly name: string } & TreeFile)
@@ -52,8 +52,13 @@ export function fileTree(files: readonly TreeFile[]): TreeNode[] {
 			}
 			dir = next;
 		}
-		// A node keeps the file's status, not the contents a document file carries.
-		dir.files.push({ name, path: file.path, ...(file.status === "R" ? { status: file.status, renamedFrom: file.renamedFrom } : { status: file.status, renamedFrom: undefined }) });
+		// A node keeps the file's status and whether it is too large, not the contents a document file carries.
+		dir.files.push({
+			name,
+			path: file.path,
+			tooLarge: file.tooLarge,
+			...(file.status === "R" ? { status: file.status, renamedFrom: file.renamedFrom } : { status: file.status, renamedFrom: undefined }),
+		});
 	}
 	return nodesOf(root, "");
 }
@@ -111,6 +116,7 @@ export function fileTreeRender(container: HTMLElement, nodes: readonly TreeNode[
 					},
 					el("span", { class: statusClass(node.status), text: node.status, title: statusLabel(node.status) }),
 					el("span", { class: "tree-name", text: node.name }),
+					...(node.tooLarge ? [el("span", { class: "tree-flag", text: "\u26A0\uFE0E", title: TOO_LARGE_LABEL })] : []),
 				);
 				row.dataset.path = node.path;
 				row.style.paddingLeft = indent;

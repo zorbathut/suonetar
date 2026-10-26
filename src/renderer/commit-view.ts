@@ -9,7 +9,7 @@ import type { Autosave, AutosaveStatus } from "./autosave.ts";
 import { bytesEqual, type TextCodec, textDecode, textShow } from "./codec.ts";
 import { button, el } from "./dom.ts";
 import { editorChunksField, editorCreate, editorDiffChanges, editorDiffInline, editorDiffSet, editorGo, editorSpan } from "./editor.ts";
-import { renameLabel, statusChange, statusClass, statusLabel } from "./file-status.ts";
+import { renameLabel, statusChange, statusClass, statusLabel, TOO_LARGE_LABEL } from "./file-status.ts";
 import { fileTree, fileTreeHighlight, fileTreeOrder, fileTreeRender, sectionCurrentForView, type TreeNode } from "./file-tree.ts";
 import { imageCompare, imagePanes } from "./image.ts";
 import type { Overview, OverviewKind, OverviewMark } from "./overview.ts";
@@ -451,7 +451,7 @@ export class CommitView {
 		s.body.style.minHeight = "";
 		this.#headerUpdate(s);
 		if (f.tooLarge) {
-			s.body.append(el("div", { class: "note", text: "Too large to show here (over 4 MiB)." }));
+			s.body.append(el("div", { class: "note", text: TOO_LARGE_LABEL }));
 		} else if (s.opaque) {
 			const panes = imagePanes(f);
 			s.body.append(panes === undefined ? el("div", { class: "note", text: "Binary file; not editable here." }) : imageCompare(panes));
@@ -748,6 +748,9 @@ export class CommitView {
 		s.badges.replaceChildren();
 		if (s.edited) {
 			s.badges.append(el("span", { class: "badge badge-draft", text: "edited" }));
+		}
+		if (f.tooLarge) {
+			s.badges.append(el("span", { class: "badge badge-warn", text: "too large", title: TOO_LARGE_LABEL }));
 		}
 		if (f.refusal !== undefined) {
 			s.badges.append(el("span", { class: "badge", text: "read-only" }));

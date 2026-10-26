@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { BLOB_LIMIT } from "../shared/limits.ts";
 import { intentCheck, type PublishResult, pidAlive, preflightPosition, publish } from "./apply.ts";
 import { type DerivedCommit, type DeriveTrees, derivedSteps, type Edit, type MergeInputs, stackDerive, treeRestacked, treeTakingPaths } from "./derive.ts";
 import {
@@ -150,7 +151,6 @@ export type ResolutionChoice =
 
 export type ResolveResult = { readonly kind: "resolved" } | { readonly kind: "invalid"; readonly reason: string };
 
-const BLOB_LIMIT = 4 * 1024 * 1024;
 // Uncommitted files shown, and stat-ed per poll, at most: an agent's `npm install` into an unignored directory would otherwise flood both.
 const WORKTREE_FILES_MAX = 2000;
 // Merge results a session remembers per repository, at most; past that it starts over.
