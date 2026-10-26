@@ -363,10 +363,6 @@ body.busy #body {
 	font-style: italic;
 }
 
-.note.clickable {
-	cursor: pointer;
-}
-
 .note-inline {
 	color: var(--fg-dim);
 	font-style: italic;

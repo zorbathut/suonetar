@@ -33,7 +33,6 @@ export type CommitViewLoaded = { readonly doc: Doc; readonly notes: readonly str
 
 export type Carry = {
 	readonly anchor: { readonly path: string; readonly index: number; readonly offset: number } | undefined;
-	readonly expanded: readonly string[];
 	readonly cursor: { readonly path: string; readonly head: number } | undefined;
 };
 
@@ -80,9 +79,6 @@ type Section = {
 	layoutStale: boolean;
 	// Says why the file is inline while the view is in three panes; only for files that have to be.
 	layoutNote: HTMLElement | undefined;
-	expanded: boolean;
-	// Collapsed when the view was built (large or generated), so expanding it was the reader's choice.
-	readonly collapsedAtFirst: boolean;
 	// Diff against the commit instead of its parent, showing only the draft's edits.
 	mine: boolean;
 	// The editor's text differs from the commit's version; updated as saves land.
@@ -95,15 +91,12 @@ type Section = {
 // A line of a file the reader is at, and how far below the top of the view its text starts.
 type Place = { readonly section: Section; readonly pos: number; readonly offset: number };
 
-const LARGE_LINES = 5000;
 // The most text (each file's draft and parent) built in idle time; files past it are built as they come near.
 const IDLE_BUILD_BYTES = 2 * 1024 * 1024;
 // A file bigger than this (draft and parent) takes long enough to build that it waits until it comes near, rather than stall whatever the reader is doing when idle time builds it.
 const IDLE_FILE_BYTES = 256 * 1024;
 // Frames the reader's place is held for after a layout switch, while the switched sections lay out, fold and line up (each takes a frame or two, and the sections switched later take their own).
 const PLACE_HOLD_FRAMES = 30;
-const LOCKFILE =
-	/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum|flake\.lock|packages\.lock\.json)$/;
 
 export function saveKeyFile(oid: string, path: string): string {
 	return `${oid}\0${path}`;
@@ -116,16 +109,6 @@ export function saveKeyMessage(oid: string): string {
 // What a section's header and its ticks call its file.
 function sectionLabel(file: File): string {
 	return file.renamedFrom === undefined ? file.path : renameLabel(file.renamedFrom, file.path);
-}
-
-function newlines(bytes: Uint8Array | undefined): number {
-	let count = 0;
-	for (const b of bytes ?? []) {
-		if (b === 10) {
-			count++;
-		}
-	}
-	return count;
 }
 
 // One commit as a single scrolling document: its message, then every changed file as an inline diff against the parent, editable in place.
@@ -268,7 +251,7 @@ export class CommitView {
 		target.textContent = status === "failed" ? `save failed: ${errorText(error)} (retrying)` : status === "saved" ? "" : status === "pending" ? "unsaved" : "saving…";
 	}
 
-	// The reader's place, for a rebuilt view of the same document to return to: the file at the top of the view and how far into it (with its position, should that file be gone), sections they expanded, and the focused editor's cursor.
+	// The reader's place, for a rebuilt view of the same document to return to: the file at the top of the view and how far into it (with its position, should that file be gone), and the focused editor's cursor.
 	carry(): Carry {
 		const current = this.#sectionCurrent();
 		const section = this.#sections[current];
@@ -276,20 +259,13 @@ export class CommitView {
 			section === undefined
 				? undefined
 				: { path: section.file.path, index: current, offset: this.#host.scroller.getBoundingClientRect().top - section.root.getBoundingClientRect().top };
-		const expanded = this.#sections.filter((s) => s.expanded && s.collapsedAtFirst).map((s) => s.file.path);
 		const active = document.activeElement;
 		const focused = this.#sections.find((s) => s.editor !== undefined && active !== null && s.editor.dom.contains(active));
 		const cursor = focused?.editor === undefined ? undefined : { path: focused.file.path, head: focused.editor.state.selection.main.head };
-		return { anchor, expanded, cursor };
+		return { anchor, cursor };
 	}
 
 	carryRestore(carry: Carry): void {
-		for (const s of this.#sections) {
-			if (carry.expanded.includes(s.file.path) && !s.expanded) {
-				s.expanded = true;
-				this.#bodyBuild(s, undefined);
-			}
-		}
 		const anchor = carry.anchor;
 		const section =
 			anchor === undefined ? undefined : (this.#sections.find((s) => s.file.path === anchor.path) ?? this.#sections[Math.min(anchor.index, this.#sections.length - 1)]);
@@ -430,8 +406,6 @@ export class CommitView {
 		const body = el("div", { class: "section-body" });
 		const root = el("section", { class: "file" }, header, body);
 		const opaque = file.tooLarge || file.binary || (file.draft !== undefined && textDecode(file.draft).kind === "binary");
-		// Collapsing is for long text; an opaque file is shown whole (or as a note) either way.
-		const large = !opaque && (LOCKFILE.test(file.path) || newlines(file.parent) + newlines(file.draft) > LARGE_LINES);
 		const section: Section = {
 			file,
 			root,
@@ -447,27 +421,14 @@ export class CommitView {
 			writable: false,
 			layoutStale: false,
 			layoutNote: undefined,
-			expanded: !large,
-			collapsedAtFirst: large,
 			mine: false,
 			// Where the commit's own version is unknown (restacking it conflicts), the user's edits cannot be told apart.
 			edited: !file.mineUnknown && !bytesEqual(file.draft, file.commit),
 			commitText: undefined,
 			shownOid: file.draftOid,
 		};
-		header.addEventListener("click", () => {
-			if (!section.expanded) {
-				section.expanded = true;
-				this.#bodyBuild(section, undefined);
-				this.#editorBuild(section, undefined);
-			}
-		});
 		this.#bodyBuild(section, undefined);
 		return section;
-	}
-
-	#editorPossible(s: Section): boolean {
-		return s.expanded && !s.opaque;
 	}
 
 	#onVisible(entries: readonly IntersectionObserverEntry[]): void {
@@ -494,8 +455,6 @@ export class CommitView {
 		} else if (s.opaque) {
 			const panes = imagePanes(f);
 			s.body.append(panes === undefined ? el("div", { class: "note", text: "Binary file; not editable here." }) : imageCompare(panes));
-		} else if (!s.expanded) {
-			s.body.append(el("div", { class: "note clickable", text: "Large or generated file, collapsed. Click the header to show it." }));
 		} else if (docText !== undefined) {
 			this.#editorBuild(s, docText);
 		} else {
@@ -510,7 +469,7 @@ export class CommitView {
 	}
 
 	#editorBuild(s: Section, docText: string | undefined): void {
-		if (!this.#editorPossible(s) || s.editor !== undefined) {
+		if (s.opaque || s.editor !== undefined) {
 			return;
 		}
 		const f = s.file;
@@ -692,7 +651,7 @@ export class CommitView {
 					break;
 				}
 				const size = (s.file.draft?.length ?? 0) + (s.file.parent?.length ?? 0);
-				if (s.editor === undefined && this.#editorPossible(s) && size <= IDLE_FILE_BYTES && this.#idleBuilt + size <= IDLE_BUILD_BYTES) {
+				if (s.editor === undefined && !s.opaque && size <= IDLE_FILE_BYTES && this.#idleBuilt + size <= IDLE_BUILD_BYTES) {
 					this.#idleBuilt += size;
 					this.#editorBuild(s, undefined);
 					break;
