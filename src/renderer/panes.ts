@@ -267,13 +267,14 @@ function regionLines(r: RegionThree, doc: Pane["doc"]): readonly [number, number
 	return doc === "a" ? [r.a0, r.a1] : doc === "b" ? [r.b0, r.b1] : [r.c0, r.c1];
 }
 
-// One pane during an alignment pass: where a region starts in it, its page offset, and the spacers it had and is getting.
+// One pane during an alignment pass: where a region starts in it, its page offset, the part of that offset only counted (leveling past the drawn viewport, which places no spacer), and the spacers it had and is getting.
 type PaneAlign = {
 	readonly view: EditorView;
 	readonly start: (r: RegionThree) => number;
 	readonly top: number;
 	readonly old: RangeCursor<Decoration>;
 	offset: number;
+	counted: number;
 	readonly spacers: Range<Decoration>[];
 };
 
@@ -521,7 +522,7 @@ export class Panes {
 		}
 	}
 
-	// Lines the panes up at the start of every unchanged region (and at the top of the visible area inside a long one), in page coordinates so that a search panel open in one pane counts, then pads the shorter panes to the longest. As MergeView's updateSpacers.
+	// Lines the panes up at the start of every unchanged region (and at the top of the visible area inside a long one), in page coordinates so that a search panel open in one pane counts, then pads the shorter panes to the longest. As MergeView's updateSpacers, except that below the drawn viewport the leveling is only counted, its spacers' height going into the end padding: a spacer placed among undrawn lines makes CodeMirror estimate them anew, so the next pass would place its spacers elsewhere and the panes would never settle. Regions get their spacers as they come into the viewport, which reaches past the visible area.
 	#align(): void {
 		const panes = this.#panes.map(
 			({ view, doc }): PaneAlign => ({
@@ -530,6 +531,7 @@ export class Panes {
 				top: view.documentTop,
 				old: view.state.field(spacersField).iter(),
 				offset: 0,
+				counted: 0,
 				spacers: [],
 			}),
 		);
@@ -539,7 +541,7 @@ export class Panes {
 				p.offset -= spacerHeight(p.old.value);
 			}
 		};
-		const level = (posOf: (p: PaneAlign) => number): void => {
+		const level = (posOf: (p: PaneAlign) => number, place: boolean): void => {
 			const heights = panes.map((p) => {
 				const pos = posOf(p);
 				passOld(p, pos);
@@ -549,7 +551,11 @@ export class Panes {
 			for (const { p, pos, height } of heights) {
 				if (max - height > EPSILON) {
 					p.offset += max - height;
-					p.spacers.push(spacerAt(pos, max - height, -1));
+					if (place) {
+						p.spacers.push(spacerAt(pos, max - height, -1));
+					} else {
+						p.counted += max - height;
+					}
 				}
 			}
 		};
@@ -559,7 +565,11 @@ export class Panes {
 			if (r.ab || r.bc) {
 				continue;
 			}
-			level((p) => p.start(r));
+			if (panes.some((p) => p.start(r) > p.view.viewport.to)) {
+				level((p) => p.start(r), false);
+				continue;
+			}
+			level((p) => p.start(r), true);
 			// The run holds the same text in every pane, so the same offset into it is the same line in each.
 			const next = regions[i + 1];
 			const length = (p: PaneAlign): number => (next === undefined ? p.view.state.doc.length : p.start(next)) - p.start(r);
@@ -574,17 +584,18 @@ export class Panes {
 				folded = true;
 			});
 			if (!folded && right.view.state.doc.lineAt(at).from === at) {
-				level((p) => p.start(r) + into);
+				level((p) => p.start(r) + into, true);
 			}
 		}
 		const ends = panes.map((p) => {
 			passOld(p, p.view.state.doc.length + 1);
 			return { p, bottom: p.top + p.view.contentHeight + p.offset };
 		});
+		// The padding at the end makes up what leveling past the viewport only counted, so the panes are as tall as when fully lined up, and stay that tall as more of them gets drawn.
 		const max = Math.max(...ends.map((e) => e.bottom));
 		for (const { p, bottom } of ends) {
-			if (max - bottom > EPSILON) {
-				p.spacers.push(spacerAt(p.view.state.doc.length, max - bottom, 1));
+			if (max - bottom + p.counted > EPSILON) {
+				p.spacers.push(spacerAt(p.view.state.doc.length, max - bottom + p.counted, 1));
 			}
 		}
 		for (const p of panes) {
