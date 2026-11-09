@@ -526,8 +526,8 @@ textarea.message {
 	padding-right: 110px;
 }
 
-/* The merge view's deleted lines come in groups of 200 (DELETED_GROUP_LINES in the local patch, patches/@codemirror+merge+*.patch, which the estimate below matches); a group is laid out only near the viewport, so a deletion of many thousands of lines lays out like one screenful. The estimate is height only: a width would hold the content open past the pane and stop lines wrapping. */
-.cm-deletedGroup {
+/* The merge view's deleted lines come in groups of 200 (DELETED_GROUP_LINES in the local patch, patches/@codemirror+merge+*.patch, which the estimate below matches); a group is laid out only near the viewport, so a deletion of many thousands of lines lays out like one screenful. The estimate is height only: a width would hold the content open past the pane and stop lines wrapping. Only a group with another after it is full; the last, however short, is always laid out, since an estimate of 200 lines for a deletion of a few would have the page's height swing by thousands of pixels every time CodeMirror drew it near the viewport. */
+.cm-deletedGroup:not(:last-child) {
 	content-visibility: auto;
 	contain-intrinsic-size: none auto calc(200 * 1lh);
 }
