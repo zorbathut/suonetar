@@ -1,4 +1,3 @@
-import type { Chunk } from "@codemirror/merge";
 import { type EditorState, type Range, StateField, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import type { ConflictStage } from "../engine/merge.ts";
@@ -11,6 +10,7 @@ import { ask, button, el } from "./dom.ts";
 import { editorChunksField, editorCreate, editorGo, editorSpan } from "./editor.ts";
 import { imageElement, imageType } from "./image.ts";
 import type { Overview, OverviewMark } from "./overview.ts";
+import type { Chunk } from "./vendor/codemirror-merge/index.ts";
 
 export type Report = Wire<ConflictReport>;
 type Record = Report["conflicts"][number];

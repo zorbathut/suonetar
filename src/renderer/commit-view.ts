@@ -1,4 +1,3 @@
-import { type Chunk, getChunks } from "@codemirror/merge";
 import { type StateField, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { CommitDocument, DocumentFile } from "../engine/session.ts";
@@ -16,6 +15,7 @@ import type { Overview, OverviewKind, OverviewMark } from "./overview.ts";
 import { Panes, type PanesKind, type PanesSpec, panesKindFor } from "./panes.ts";
 import { saveBytesFile, saveBytesMessage } from "./save-bytes.ts";
 import { worktreeLabel } from "./stack-view.ts";
+import { type Chunk, getChunks } from "./vendor/codemirror-merge/index.ts";
 
 type Doc = Wire<CommitDocument>;
 type File = Wire<DocumentFile>;

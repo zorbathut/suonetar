@@ -119,6 +119,9 @@ class DeletionWidget extends WidgetType {
   toDOM(view: EditorView) { return this.dom || (this.dom = this.buildDOM(view)) }
 }
 
+// Suonetar: deleted lines per .cm-deletedGroup.
+const DELETED_GROUP_LINES = 200
+
 function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) {
   let known = DeletionWidgets.get(chunk.changes)
   if (known) return known
@@ -151,10 +154,18 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
 
     let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA)
     let lang = syntaxHighlightDeletions && state.facet(language)
+    // Suonetar: lines go into groups of DELETED_GROUP_LINES, which Suonetar's CSS (.cm-deletedGroup) lays out only near the viewport (content-visibility), so a deletion of many thousands of lines costs no more layout than one screenful.
+    let group: HTMLElement | null = null, groupLines = 0
     let line: HTMLElement = makeLine()
     let changes = chunk.changes, changeI = 0, inside = false
     function makeLine() {
-      let div = dom.appendChild(document.createElement("div"))
+      if (group == null || groupLines == DELETED_GROUP_LINES) {
+        group = dom.appendChild(document.createElement("div"))
+        group.className = "cm-deletedGroup"
+        groupLines = 0
+      }
+      groupLines++
+      let div = group.appendChild(document.createElement("div"))
       div.className = "cm-deletedLine"
       return div.appendChild(document.createElement("del"))
     }

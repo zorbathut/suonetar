@@ -1,4 +1,3 @@
-import { Chunk } from "@codemirror/merge";
 import { ChangeSet, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { diffByLine } from "./diff.ts";
@@ -14,6 +13,7 @@ import {
 	panesStops,
 	type RegionThree,
 } from "./panes-regions.ts";
+import { Chunk } from "./vendor/codemirror-merge/index.ts";
 
 const CONF = { override: diffByLine };
 

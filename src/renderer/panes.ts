@@ -1,4 +1,3 @@
-import { Chunk } from "@codemirror/merge";
 import { type EditorState, type Extension, type Range, type RangeCursor, RangeSet, StateEffect, StateField, Text } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, GutterMarker, gutter, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import type { Indentation } from "../engine/editorconfig.ts";
@@ -19,6 +18,7 @@ import {
 	panesStops,
 	type RegionThree,
 } from "./panes-regions.ts";
+import { Chunk } from "./vendor/codemirror-merge/index.ts";
 
 // The spacer, fold and chunk machinery here follows MergeView in @codemirror/merge (MIT, Marijn Haverbeke and others), widened to three editors.
 

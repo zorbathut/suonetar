@@ -1,8 +1,8 @@
-import { type Change, Chunk, presentableDiff } from "@codemirror/merge";
 import { ChangeSet, Text } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { TIMEOUT_SCALE } from "../engine/test-support/timeout.ts";
 import { diffByLine } from "./diff.ts";
+import { type Change, Chunk, presentableDiff } from "./vendor/codemirror-merge/index.ts";
 
 const CONFIG = { override: diffByLine };
 

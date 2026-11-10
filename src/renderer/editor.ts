@@ -1,7 +1,6 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, indentOnInput, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { Chunk, getChunks, unifiedMergeView } from "@codemirror/merge";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension, StateField, Text } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -22,6 +21,7 @@ import type { Wire } from "../shared/api.ts";
 import { diffByLine } from "./diff.ts";
 import { editorIndentExtension } from "./indentation.ts";
 import { changeKind, type OverviewChange } from "./overview.ts";
+import { Chunk, getChunks, unifiedMergeView } from "./vendor/codemirror-merge/index.ts";
 import { wrapIndented } from "./wrap-indent.ts";
 
 export type EditorSpec = {

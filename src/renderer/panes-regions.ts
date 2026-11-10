@@ -1,5 +1,5 @@
-import type { Chunk } from "@codemirror/merge";
 import type { Text } from "@codemirror/state";
+import type { Chunk } from "./vendor/codemirror-merge/index.ts";
 
 // A chunk as line ranges, each end exclusive and counted from 0: lines [a0, a1) of the older document against [b0, b1) of the newer.
 export type LinesPair = { readonly a0: number; readonly a1: number; readonly b0: number; readonly b1: number };

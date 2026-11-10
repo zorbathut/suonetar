@@ -1,4 +1,4 @@
-import { Change, diff } from "@codemirror/merge";
+import { Change, diff } from "./vendor/codemirror-merge/index.ts";
 
 // Lines [a0, a1) of the original text against [b0, b1) of the new one: lines that differ, or a run a search found shared.
 export type Region = { a0: number; a1: number; b0: number; b1: number };
