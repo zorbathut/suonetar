@@ -44,6 +44,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The renderer's layout tests run the Electron binary, which the electron package otherwise downloads only when first asked for its path.
+      - name: Install Electron
+        run: npx install-electron
+
       - name: Check
         run: npm run check
 

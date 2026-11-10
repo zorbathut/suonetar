@@ -7,8 +7,8 @@ A commit-stack editor for plain git: scrub through a series of commits, open any
 ## Build and run
 
 - `npm run app -- <repo>` builds and opens the editor on a repository (relative paths resolve against where npm was run). With none, it opens the repository npm was run in, which from this checkout is Suonetar's own working tree: give a scratch repository to try the app, or run `npm --prefix <checkout> run app` from outside any repository to see the welcome screen; `npm run dev -- <repo>` runs it with renderer hot reload.
-- `npm run check` type-checks (`tsconfig.json` for engine, main, and preload; `tsconfig.renderer.json`, built with `tsc -b`, for the DOM side, against the declarations of the vendored code, which it builds first as a referenced project under that code's own settings) and lints; `npm test` runs the Vitest suite, which drives real git.
-- Layout: `src/engine` (git operations, Node only), `src/main` (Electron main process, hosts the engine), `src/preload` (the IPC bridge), `src/shared` (types both sides of IPC use), `src/renderer` (the UI; no Node access), with `src/renderer/vendor` holding third-party source we change (its own TypeScript project, which Biome skips).
+- `npm run check` type-checks (`tsconfig.json` for engine, main, and preload; `tsconfig.renderer.json`, built with `tsc -b`, for the DOM side, against the declarations of the vendored code, which it builds first as a referenced project under that code's own settings) and lints; `npm test` runs the Vitest suite, which drives real git, and runs the renderer's layout tests (`merge-layout.test.ts`) in a hidden Electron window, headless on Linux, through `src/main/test-support/layout-harness.ts`; they need the Electron binary, which `npx install-electron` fetches if it is missing.
+- Layout: `src/engine` (git operations, Node only), `src/main` (Electron main process, hosts the engine), `src/preload` (the IPC bridge), `src/shared` (types both sides of IPC use), `src/renderer` (the UI; no Node access), with `src/renderer/vendor` holding third-party source we change (its own TypeScript project; Biome skips upstream's files).
 
 ## Standards
 
