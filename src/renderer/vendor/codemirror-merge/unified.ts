@@ -8,8 +8,9 @@ import {computeChunks, ChunkField, mergeConfig} from "./merge"
 import {Change, DiffConfig} from "./diff"
 import {decorateChunks, collapseUnchanged, changedText} from "./deco"
 import {baseTheme} from "./theme"
-// Suonetar: deleted lines in groups laid out only near the viewport.
-import {DELETED_GROUP_LINES, deletedGroupHeightsKeep, deletedGroupLazy} from "./deletion-layout"
+// Suonetar: deleted lines in groups laid out only near the viewport, and deletion height estimates.
+import {DELETED_GROUP_LINES, deletedGroupHeightsKeep, deletedGroupLazy, deletedLineLengths, deletionEstimate, deletionLayout,
+        deletionMetrics, type DeletionMetrics} from "./deletion-layout"
 
 interface UnifiedMergeConfig {
   /// The other document to compare the editor content with.
@@ -65,6 +66,8 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
   return [
     Prec.low(decorateChunks),
     deletedChunks,
+    // Suonetar: deletion height estimates.
+    deletionLayout,
     baseTheme,
     EditorView.editorAttributes.of({class: "cm-merge-b"}),
     computeChunks.of((chunks, tr) => {
@@ -116,14 +119,25 @@ const DeletionWidgets: WeakMap<readonly Change[], Decoration> = new WeakMap
 
 class DeletionWidget extends WidgetType {
   dom: HTMLElement | null = null
-  constructor(readonly buildDOM: (view: EditorView) => HTMLElement) { super() }
-  eq(other: DeletionWidget) { return this.dom == other.dom }
+  // Suonetar: an estimate (in px, or -1 for none) and the editor's metrics it was made with.
+  constructor(readonly buildDOM: (view: EditorView) => HTMLElement, readonly estimate: number, readonly metrics: DeletionMetrics | undefined) { super() }
+  // Suonetar: the estimate too, since widgets not yet drawn have no DOM to tell them apart, and CodeMirror only re-estimates a widget that differs.
+  eq(other: DeletionWidget) { return this.dom == other.dom && this.estimate == other.estimate }
   toDOM(view: EditorView) { return this.dom || (this.dom = this.buildDOM(view)) }
+  // Suonetar: a widget re-estimated after it was drawn keeps its DOM.
+  updateDOM(dom: HTMLElement) { return dom == this.dom }
+  // Suonetar: CodeMirror counts a widget without an estimate as one line until it is drawn.
+  get estimatedHeight() { return this.estimate }
 }
 
 function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) {
   let known = DeletionWidgets.get(chunk.changes)
-  if (known) return known
+  // Suonetar: a widget is estimated anew when the editor's metrics change, unless it has been drawn since its estimate was made with metrics: then CodeMirror has measured it, and a new one would throw that height away. One drawn before the editor was measured, as an editor out of view draws without measuring, is estimated anew once it is, keeping its DOM. Looking at the widget's DOM from here is impure, as the cache itself is.
+  let metrics = state.field(deletionMetrics)
+  let shows = !hideContent && chunk.fromA < chunk.toA
+  let knownWidget = known?.spec.widget
+  if (known && knownWidget instanceof DeletionWidget && (!shows || (knownWidget.dom && knownWidget.metrics) || knownWidget.metrics == metrics)) return known
+  let lengths = shows ? deletedLineLengths(state.field(originalDoc), chunk) : new Int32Array(0)
 
   let buildDOM = (view: EditorView) => {
     let {highlightChanges, syntaxHighlightDeletions, syntaxHighlightDeletionsMaxLength, mergeControls} =
@@ -154,13 +168,13 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
     let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA)
     let lang = syntaxHighlightDeletions && state.facet(language)
     // Suonetar: lines go into groups of DELETED_GROUP_LINES; the full ones are laid out only near the viewport.
-    let group: HTMLElement | null = null, groupLines = 0
+    let group: HTMLElement | null = null, groupLines = 0, groupsFull = 0
     deletedGroupHeightsKeep(dom)
     let line: HTMLElement = makeLine()
     let changes = chunk.changes, changeI = 0, inside = false
     function makeLine() {
       if (group == null || groupLines == DELETED_GROUP_LINES) {
-        if (group) deletedGroupLazy(group)
+        if (group) deletedGroupLazy(view, group, lengths, DELETED_GROUP_LINES * groupsFull++)
         group = dom.appendChild(document.createElement("div"))
         group.className = "cm-deletedGroup"
         groupLines = 0
@@ -218,10 +232,13 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
     if (!line.firstChild) line.appendChild(document.createElement("br"))
     return dom
   }
+  // Suonetar: the estimate, and the DOM of the widget this one re-estimates.
+  let widget = new DeletionWidget(buildDOM, deletionEstimate(lengths, metrics), metrics)
+  if (knownWidget instanceof DeletionWidget) widget.dom = knownWidget.dom
   let deco = Decoration.widget({
     block: true,
     side: -1,
-    widget: new DeletionWidget(buildDOM)
+    widget
   })
   DeletionWidgets.set(chunk.changes, deco)
   return deco
@@ -274,7 +291,9 @@ function buildDeletedChunks(state: EditorState) {
 const deletedChunks = StateField.define<DecorationSet>({
   create: state => buildDeletedChunks(state),
   update(deco, tr) {
-    return tr.state.field(ChunkField, false) != tr.startState.field(ChunkField, false) ? buildDeletedChunks(tr.state) : deco
+    // Suonetar: also when the editor's metrics change, for the estimates.
+    return tr.state.field(ChunkField, false) != tr.startState.field(ChunkField, false) ||
+      tr.state.field(deletionMetrics, false) != tr.startState.field(deletionMetrics, false) ? buildDeletedChunks(tr.state) : deco
   },
   provide: f => EditorView.decorations.from(f)
 })
