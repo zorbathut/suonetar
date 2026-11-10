@@ -10,6 +10,8 @@ type Config = {
   syntaxHighlightDeletions?: boolean,
   syntaxHighlightDeletionsMaxLength?: number,
   mergeControls?: boolean | ((type: "accept" | "reject", action: (event: MouseEvent) => void) => HTMLElement),
+  // Suonetar: attributes for the unified view's deleted lines.
+  deletedLineAttributes?: (line: string, state: EditorState) => {[name: string]: string} | null,
   overrideChunk?: ((
     state: EditorState,
     chunk: Chunk,

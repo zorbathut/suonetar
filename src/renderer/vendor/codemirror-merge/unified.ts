@@ -44,6 +44,10 @@ interface UnifiedMergeConfig {
   /// a change (default is 3), and `minSize` gives the minimum amount
   /// of collapsible lines that need to be present (defaults to 4).
   collapseUnchanged?: {margin?: number, minSize?: number},
+  /// Suonetar: attributes for a deleted line's element, given the
+  /// line's text, as a line decoration gives a line of the editor's
+  /// own. Not `class`, which would replace `cm-deletedLine`.
+  deletedLineAttributes?: (line: string, state: EditorState) => {[name: string]: string} | null
 }
 
 const deletedChunkGutterMarker = new class extends GutterMarker {
@@ -83,6 +87,8 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
       syntaxHighlightDeletionsMaxLength: 3000,
       mergeControls: config.mergeControls ?? true,
       overrideChunk: config.allowInlineDiffs ? overrideChunkInline : undefined,
+      // Suonetar: attributes for deleted lines.
+      deletedLineAttributes: config.deletedLineAttributes,
       side: "b"
     }),
     originalDoc.init(() => orig),
@@ -140,7 +146,7 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
   let lengths = shows ? deletedLineLengths(state.field(originalDoc), chunk) : new Int32Array(0)
 
   let buildDOM = (view: EditorView) => {
-    let {highlightChanges, syntaxHighlightDeletions, syntaxHighlightDeletionsMaxLength, mergeControls} =
+    let {highlightChanges, syntaxHighlightDeletions, syntaxHighlightDeletionsMaxLength, mergeControls, deletedLineAttributes} =
       state.facet(mergeConfig)
     let dom = document.createElement("div")
     dom.className = "cm-deletedChunk"
@@ -170,9 +176,10 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
     // Suonetar: lines go into groups of DELETED_GROUP_LINES; the full ones are laid out only near the viewport.
     let group: HTMLElement | null = null, groupLines = 0, groupsFull = 0
     deletedGroupHeightsKeep(dom)
-    let line: HTMLElement = makeLine()
+    let line: HTMLElement = makeLine(0)
     let changes = chunk.changes, changeI = 0, inside = false
-    function makeLine() {
+    // Suonetar: `start` is where the line starts in `text`, for deletedLineAttributes.
+    function makeLine(start: number) {
       if (group == null || groupLines == DELETED_GROUP_LINES) {
         if (group) deletedGroupLazy(view, group, lengths, DELETED_GROUP_LINES * groupsFull++)
         group = dom.appendChild(document.createElement("div"))
@@ -182,13 +189,18 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
       groupLines++
       let div = group.appendChild(document.createElement("div"))
       div.className = "cm-deletedLine"
+      if (deletedLineAttributes) {
+        let end = text.indexOf("\n", start)
+        let attrs = deletedLineAttributes(text.slice(start, end < 0 ? text.length : end), view.state)
+        if (attrs) for (let name in attrs) div.setAttribute(name, attrs[name])
+      }
       return div.appendChild(document.createElement("del"))
     }
     function add(from: number, to: number, cls: string) {
       for (let at = from; at < to;) {
         if (text.charAt(at) == "\n") {
           if (!line.firstChild) line.appendChild(document.createElement("br"))
-          line = makeLine()
+          line = makeLine(at + 1)
           at++
           continue
         }

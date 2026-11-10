@@ -22,7 +22,7 @@ import { diffByLine } from "./diff.ts";
 import { editorIndentExtension } from "./indentation.ts";
 import { changeKind, type OverviewChange } from "./overview.ts";
 import { Chunk, getChunks, unifiedMergeView } from "./vendor/codemirror-merge/index.ts";
-import { wrapIndented } from "./wrap-indent.ts";
+import { wrapIndentAttributes, wrapIndented } from "./wrap-indent.ts";
 
 export type EditorSpec = {
 	readonly path: string;
@@ -88,6 +88,7 @@ export function editorDiffInline(original: string, editable: boolean): Extension
 		allowInlineDiffs: true,
 		// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
 		diffConfig: { override: diffByLine },
+		deletedLineAttributes: wrapIndentAttributes,
 	});
 }
 
