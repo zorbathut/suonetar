@@ -71,7 +71,7 @@ The repository is re-read every second, and before every operation. When the age
 ## Development
 
 ```sh
-npm run check   # type-check (engine and renderer separately) and lint
+npm run check   # type-check (engine, renderer, and the vendored code separately) and lint
 npm test        # Vitest; the engine tests drive real git
 npm run dist    # package for this platform into dist/: an AppImage and a tarball on Linux, an installer on Windows
 ```

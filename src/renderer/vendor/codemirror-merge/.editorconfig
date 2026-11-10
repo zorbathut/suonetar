@@ -1,0 +1,4 @@
+# Upstream's own style: two spaces.
+[*.ts]
+indent_style = space
+indent_size = 2

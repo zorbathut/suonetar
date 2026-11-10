@@ -1,8 +1,10 @@
 {
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
-		"lib": ["es2024", "dom", "dom.iterable"]
+		"lib": ["es2024", "dom", "dom.iterable"],
+		"tsBuildInfoFile": "node_modules/.cache/tsconfig.renderer.tsbuildinfo"
 	},
 	"include": ["src/renderer", "src/shared"],
-	"exclude": []
+	"exclude": ["src/renderer/vendor"],
+	"references": [{ "path": "src/renderer/vendor/codemirror-merge" }]
 }

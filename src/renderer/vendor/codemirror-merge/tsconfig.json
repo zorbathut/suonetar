@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"composite": true,
+		"emitDeclarationOnly": true,
+		"outDir": "../../../../node_modules/.cache/vendor-types/codemirror-merge",
+		"target": "es2024",
+		"lib": ["es2024", "dom", "dom.iterable"],
+		"types": [],
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"noUnusedLocals": true,
+		"useDefineForClassFields": false,
+		"skipLibCheck": true
+	},
+	"include": ["."]
+}
