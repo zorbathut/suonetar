@@ -109,6 +109,13 @@ async function pass(scroller: HTMLElement, from: number): Promise<number[]> {
 	return changes;
 }
 
+// The far deletion's widget, from the end of the document, which it ends: where a pass leaves the scroller depends on the platform's metrics, and CodeMirror draws only so far past the viewport.
+async function deletionAtEnd(scroller: HTMLElement, editor: EditorView): Promise<HTMLElement | null> {
+	scroller.scrollTop = scroller.scrollHeight;
+	await settle();
+	return deletionChunk(editor);
+}
+
 // A deletion far down its file: 3000 inserted lines, then 1200 deleted below 10 kept ones. Gives where in the scroller the deletion starts, by CodeMirror's estimate, less a screen.
 function deletionFar(line: (i: number) => string): { readonly scroller: HTMLElement; readonly editor: EditorView; readonly passFrom: () => number } {
 	const { scroller, view } = pageDoc();
@@ -166,10 +173,7 @@ async function estimate(line: (i: number) => string): Promise<unknown> {
 	await settle();
 	const initial = scroller.scrollHeight;
 	await pass(scroller, passFrom());
-	// The deletion ends the document.
-	scroller.scrollTop = scroller.scrollHeight;
-	await settle();
-	const chunk = deletionChunk(editor);
+	const chunk = await deletionAtEnd(scroller, editor);
 	if (chunk === null) {
 		throw new Error("the deletion is not drawn at the end of the document");
 	}
@@ -209,7 +213,7 @@ async function stability(): Promise<unknown> {
 	const from = passFrom();
 	const first = await pass(scroller, from);
 	const second = await pass(scroller, from);
-	const chunk = deletionChunk(editor);
+	const chunk = await deletionAtEnd(scroller, editor);
 	scroller.scrollTop = 0;
 	await settle();
 	const leftDom = chunk !== null && !chunk.isConnected;
@@ -222,7 +226,7 @@ async function metricsChange(): Promise<unknown> {
 	const { scroller, editor, passFrom } = deletionFar(lineWrapped);
 	await settle();
 	await pass(scroller, passFrom());
-	const chunk = deletionChunk(editor);
+	const chunk = await deletionAtEnd(scroller, editor);
 	scroller.scrollTop = 0;
 	await settle();
 	// With the deletion out of the DOM, the editor's height is what the height map holds.
