@@ -9,6 +9,7 @@
 		"module": "esnext",
 		"moduleResolution": "bundler",
 		"strict": true,
+		"isolatedModules": true,
 		"noUnusedLocals": true,
 		"useDefineForClassFields": false,
 		"skipLibCheck": true
