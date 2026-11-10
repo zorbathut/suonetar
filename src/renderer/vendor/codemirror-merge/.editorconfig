@@ -2,3 +2,8 @@
 [*.ts]
 indent_style = space
 indent_size = 2
+
+# Suonetar's own module keeps Suonetar's style.
+[deletion-layout*.ts]
+indent_style = tab
+indent_size = 4

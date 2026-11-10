@@ -526,12 +526,6 @@ textarea.message {
 	padding-right: 110px;
 }
 
-/* The merge view's deleted lines come in groups of 200 (DELETED_GROUP_LINES in vendor/codemirror-merge/unified.ts, which the estimate below matches); a group is laid out only near the viewport, so a deletion of many thousands of lines lays out like one screenful. The estimate is height only: a width would hold the content open past the pane and stop lines wrapping. Only a group with another after it is full; the last, however short, is always laid out, since an estimate of 200 lines for a deletion of a few would have the page's height swing by thousands of pixels every time CodeMirror drew it near the viewport. */
-.cm-deletedGroup:not(:last-child) {
-	content-visibility: auto;
-	contain-intrinsic-size: none auto calc(200 * 1lh);
-}
-
 /* A group above the viewport takes its real height (wrapped lines make it far from the estimate) as the reader scrolls up into it, so the browser has to anchor the scroll on what is in view. CodeMirror turns that off in its scroller to anchor that scroller itself, but here the document around the editor scrolls. Only the inline diff (unifiedMergeView marks its editor cm-merge-b): in panes, browser anchoring makes their own jumps worse. The extra class outweighs CodeMirror's own rule rather than relying on stylesheet order. */
 .cm-editor.cm-merge-b > .cm-scroller {
 	overflow-anchor: auto;

@@ -8,6 +8,8 @@ import {computeChunks, ChunkField, mergeConfig} from "./merge"
 import {Change, DiffConfig} from "./diff"
 import {decorateChunks, collapseUnchanged, changedText} from "./deco"
 import {baseTheme} from "./theme"
+// Suonetar: deleted lines in groups laid out only near the viewport.
+import {DELETED_GROUP_LINES, deletedGroupHeightsKeep, deletedGroupLazy} from "./deletion-layout"
 
 interface UnifiedMergeConfig {
   /// The other document to compare the editor content with.
@@ -119,9 +121,6 @@ class DeletionWidget extends WidgetType {
   toDOM(view: EditorView) { return this.dom || (this.dom = this.buildDOM(view)) }
 }
 
-// Suonetar: deleted lines per .cm-deletedGroup.
-const DELETED_GROUP_LINES = 200
-
 function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) {
   let known = DeletionWidgets.get(chunk.changes)
   if (known) return known
@@ -154,12 +153,14 @@ function deletionWidget(state: EditorState, chunk: Chunk, hideContent: boolean) 
 
     let text = view.state.field(originalDoc).sliceString(chunk.fromA, chunk.endA)
     let lang = syntaxHighlightDeletions && state.facet(language)
-    // Suonetar: lines go into groups of DELETED_GROUP_LINES, which Suonetar's CSS (.cm-deletedGroup) lays out only near the viewport (content-visibility), so a deletion of many thousands of lines costs no more layout than one screenful.
+    // Suonetar: lines go into groups of DELETED_GROUP_LINES; the full ones are laid out only near the viewport.
     let group: HTMLElement | null = null, groupLines = 0
+    deletedGroupHeightsKeep(dom)
     let line: HTMLElement = makeLine()
     let changes = chunk.changes, changeI = 0, inside = false
     function makeLine() {
       if (group == null || groupLines == DELETED_GROUP_LINES) {
+        if (group) deletedGroupLazy(group)
         group = dom.appendChild(document.createElement("div"))
         group.className = "cm-deletedGroup"
         groupLines = 0

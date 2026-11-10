@@ -78,39 +78,17 @@ function mergeControl(type: "reject" | "accept", action: (e: MouseEvent) => void
 // Holds how an editor shows its diff, so that it can change without the editor being replaced.
 const diffCompartment = new Compartment();
 
-// A full group of deleted lines (.cm-deletedGroup in style.css) is laid out only near the viewport; once CodeMirror has taken a deletion's widget out of the page, the browser forgets the groups' laid-out heights, and drawing it again would bring back the estimate of 200 unwrapped lines and swing the page's height. So a group's height as it scrolls out of the browser's reach goes into its own style, which the widget's DOM keeps; a group still on screen when a jump drops the whole widget is estimated once more. A listener of its own, since CodeMirror's domEventObservers never see events from inside the deletion widget, which ignores them.
-const deletedGroupHeights = ViewPlugin.define((view) => {
-	// Every offscreen group reports being skipped as its widget is first drawn; reading its height then would force a layout per group for an estimate already known.
-	const shown = new WeakSet<HTMLElement>();
-	const onChange = (e: Event): void => {
-		const group = e.target;
-		if (!(e instanceof ContentVisibilityAutoStateChangeEvent && group instanceof HTMLElement && group.classList.contains("cm-deletedGroup"))) {
-			return;
-		}
-		if (!e.skipped) {
-			shown.add(group);
-		} else if (shown.has(group)) {
-			group.style.containIntrinsicSize = `none auto ${group.getBoundingClientRect().height}px`;
-		}
-	};
-	view.contentDOM.addEventListener("contentvisibilityautostatechange", onChange);
-	return { destroy: () => view.contentDOM.removeEventListener("contentvisibilityautostatechange", onChange) };
-});
-
 // The diff shown inline against `original`.
 export function editorDiffInline(original: string, editable: boolean): Extension {
-	return [
-		unifiedMergeView({
-			original: Text.of(original.split("\n")),
-			mergeControls: editable ? mergeControl : false,
-			collapseUnchanged: { margin: 3, minSize: 6 },
-			syntaxHighlightDeletions: true,
-			allowInlineDiffs: true,
-			// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
-			diffConfig: { override: diffByLine },
-		}),
-		deletedGroupHeights,
-	];
+	return unifiedMergeView({
+		original: Text.of(original.split("\n")),
+		mergeControls: editable ? mergeControl : false,
+		collapseUnchanged: { margin: 3, minSize: 6 },
+		syntaxHighlightDeletions: true,
+		allowInlineDiffs: true,
+		// CodeMirror's own diff works on characters and gives up on a large rewrite, making one change of it.
+		diffConfig: { override: diffByLine },
+	});
 }
 
 // The viewport extent of lines [fromB, toB) of the editor's text; with none, of the deleted lines shown above `fromB`, which share its line block. A chunk's `toB` is one past the end of the text when it runs to the end.
